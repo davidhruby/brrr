@@ -1,0 +1,4 @@
+              disk0       cpu    load average
+    KB/t  tps  MB/s  us sy id   1m   5m   15m
+   28.28   26  0.71   4  2 94  1.58 1.56 2.19
+   33.10 2384 77.08   5 10 85  1.58 1.56 2.19

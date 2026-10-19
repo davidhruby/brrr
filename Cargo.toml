@@ -1,0 +1,21 @@
+[package]
+name = "brrr"
+version = "0.1.0"
+edition = "2024"
+
+[[bin]]
+name = "jonhoo"
+path = "src/jonhoo/main.rs"
+
+[[bin]]
+name = "david"
+path = "src/david/main.rs"
+
+[[bin]]
+name = "analyze-xctrace"
+path = "src/analyze/xctrace/main.rs"
+
+[dependencies]
+quick-xml = { version = "0.42.0", features = ["serialize", "overlapped-lists"] }
+serde = { version = "1.0.229", features = ["derive"] }
+rustc-demangle = "0.1.28"

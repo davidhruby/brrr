@@ -2,6 +2,7 @@
 
 **Dates:** YYYY-MM-DD – YYYY-MM-DD
 **Video progress:** stopped at [hh:mm:ss](https://www.youtube.com/watch?v=tCY7p6dVAGE&t=0s) when this part was published
+**Code:** git tag [`partNNN`](https://github.com/davidhruby/brrr/tree/partNNN). To get the code exactly as it was for this part: `git checkout partNNN`
 
 ## Goal
 

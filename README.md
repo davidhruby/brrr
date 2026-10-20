@@ -9,12 +9,12 @@ code works with the hardware: CPU, caches, memory and the SSD.
 The repo holds two binaries side by side: `david` (my own code) and `jonhoo` (Jon's code,
 lightly adapted, used as the reference).
 
-📓 **The learning notes live in [`docs/`](docs/README.md).** Start with
-[Part 001 — The first naive version](docs/part001-first-naive-version.md):
+📓 **The learning notes live in [`docs/`](docs/README.md).** Start with the
+[Introduction](docs/intro.md), then [Part 001 — The first naive version](docs/part001-first-naive-version.md):
 
-- [Goal](docs/part001-first-naive-version.md#goal): the challenge and what I want to learn from it
-- [Setup](docs/part001-first-naive-version.md#setup-generating-the-input-file): generating the 100M and 1B input files
-- [My machine](docs/part001-first-naive-version.md#my-machine): the laptop all numbers come from
+- [Goal](docs/intro.md#goal): the challenge and what I want to learn from it
+- [Setup](docs/notes/setup-generating-the-input-file.md): generating the 100M and 1B input files
+- [My machine](docs/notes/my-machine.md): the laptop all numbers come from
 - [Measurements](docs/part001-first-naive-version.md#measurements): `david` vs `jonhoo`
 
 ## Quick start

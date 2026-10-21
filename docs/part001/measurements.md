@@ -18,6 +18,8 @@ saves their raw, unmodified output:
 diskutil erasevolume APFS RAMDisk $(hdiutil attach -nomount ram://4194304)
 cp input/1M_measurements.txt input/100M_measurements.txt /Volumes/RAMDisk/
 
+cargo build --release
+
 scripts/measure.sh david 1M part001
 scripts/measure.sh jonhoo 1M part001
 scripts/measure.sh david 100M part001

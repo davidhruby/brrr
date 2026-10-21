@@ -16,7 +16,7 @@ Each part covers one step of the video and can span several days. It records:
 |------|---------------------------|-----------------------------------------------------------|-----------|
 | –    |                           | [Introduction](intro.md): what this is about, the challenge, setup, my machine, approach | |
 | 001  | 2026-10-15 – 2026-10-20   | [The first naive version](part001-first-naive-version.md) | [`part001`](https://github.com/davidhruby/brrr/tree/part001) |
-| 002  | 2026-10-21 – 2026-10-21   | [Streaming with `BufReader`](part002-bufreader.md) | [`part002`](https://github.com/davidhruby/brrr/tree/part002) |
+| 002  | 2026-10-21 – 2026-10-21   | [`BufReader` and `split_once`](part002.md) | [`part002`](https://github.com/davidhruby/brrr/tree/part002) |
 
 Every part has a git tag with the code as it was at the end of that part. To see it:
 

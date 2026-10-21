@@ -1,4 +1,4 @@
-# Part 002 — Streaming with `BufReader`
+# Part 002 — `BufReader` and `split_once`
 
 **Dates:** 2026-10-21 – 2026-10-21
 **Video progress:** stopped at [38:38](https://www.youtube.com/watch?v=tCY7p6dVAGE&t=2318s) when this part was published
@@ -8,9 +8,11 @@ New here? Start with the [Introduction](intro.md).
 
 ## What changed
 
+### 1. Streaming with `BufReader`
+
 Step 1 of the [Next steps from Part 001](part001-first-naive-version.md#next-steps): my version
-now streams the file with `BufReader`, like Jon's, instead of loading it all with
-`read_to_string`. Nothing else changed.
+streams the file with `BufReader`, like Jon's, instead of loading it all with
+`read_to_string`.
 
 Before:
 
@@ -28,28 +30,57 @@ for line in reader.lines() {
     let line = line.unwrap();
 ```
 
-## Measurements
-
-Measured with [`scripts/measure.sh`](../scripts/measure.sh), the same way as in Part 001
-([How I measure](part001/measurements.md#how-i-measure)). Raw output in
-[`measurements/part002/`](../measurements/part002/). The output is identical to Jon's on all
-three files.
+Measurements after this change (raw output from commit
+[`9b1c02f`](https://github.com/davidhruby/brrr/tree/9b1c02f/measurements/part002)):
 
 | | `david` 100M | `jonhoo` 100M | `david` 1B | `jonhoo` 1B |
 |---|---|---|---|---|
-| Wall time | 15.3 s | 10.6 s | **146 s** | **107 s** |
+| Wall time | 15.3 s | 10.6 s | 146 s | 107 s |
 | Memory | 1.9 MB | 1.9 MB | 1.9 MB | 1.9 MB |
 | Swapped to the SSD | 0 | 0 | 0 | 0 |
-| Instructions per row | ~2,500 | ~1,800 | ~2,560 | ~1,840 |
+| Instructions per row | ~2,530 | ~1,800 | ~2,560 | ~1,840 |
 
-Jon's numbers are from Part 001 (same code, same machine).
+**The swapping on 1B is gone** (266 s → 146 s, 13.8 GB → 1.9 MB), but every row got more
+expensive: `BufRead::lines()` allocates a new `String` for each line, while `str::lines()` on
+the big `String` didn't. That's why 100M, which never swapped, got slower than in Part 001
+(12.5 s → 15.3 s; part of it is waiting for a RAM disk that was partly in swap).
 
-Compared with [Part 001](part001-first-naive-version.md#measurements), my 1B run went from
-**266 s to 146 s** (1.8× faster) and from 13.8 GB of memory to 1.9 MB: the swapping is gone.
-Every row costs more, though (~2,000 → ~2,500 instructions): `BufRead::lines()` allocates a
-new `String` for each line, while `str::lines()` on the big `String` didn't. That's why 100M,
-which never swapped, got slower (12.5 s → 15.3 s, part of it waiting for a RAM disk that was
-partly in swap).
+### 2. `split_once` instead of `split(';').collect::<Vec<_>>()`
+
+Step 2 of the [Next steps from Part 001](part001-first-naive-version.md#next-steps): no `Vec`
+per line any more, and the search for `;` stops at the first one. With `.unwrap()` on the
+result, a line without `;` now stops the program instead of being skipped silently, like
+Jon's version (step 7).
+
+Before:
+
+```rust
+let split = line.split(';').collect::<Vec<&str>>();
+if split.len() == 2 {
+    let location = split[0];
+    let measurement = &split[1].parse::<f32>().unwrap();
+```
+
+After:
+
+```rust
+let (location, measurement_str) = line.split_once(';').unwrap();
+let measurement = measurement_str.parse::<f32>().unwrap();
+```
+
+Measurements after this change (raw output in
+[`measurements/part002/`](../measurements/part002/)):
+
+| | `david` 100M | `jonhoo` 100M | `david` 1B | `jonhoo` 1B |
+|---|---|---|---|---|
+| Wall time | 12.3 s | 10.6 s | 126 s | 107 s |
+| Memory | 1.8 MB | 1.9 MB | 1.8 MB | 1.9 MB |
+| Swapped to the SSD | 0 | 0 | 0 | 0 |
+| Instructions per row | ~1,980 | ~1,800 | ~2,010 | ~1,840 |
+
+`split_once` took back almost exactly what `BufReader` added: ~540 instructions per row less
+(−22 %) and 15 % fewer CPU cycles, by dropping the `Vec` allocation per line and the search
+for a second `;`. 1B got another 14 % faster.
 
 ## What I learned
 

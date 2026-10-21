@@ -1,6 +1,6 @@
 # Part 001 — Measurements
 
-*The full measurements behind [Part 001 — The first naive version](../part001-first-naive-version.md).
+*The full measurements behind [Part 001 — The first naive version](../part002-first-naive-version.md).
 The part itself only has a short summary.*
 
 **Machine:** see [My machine](../notes/my-machine.md). All runs use a `--release` build and were made with
@@ -20,14 +20,16 @@ cp input/1M_measurements.txt input/100M_measurements.txt /Volumes/RAMDisk/
 
 cargo build --release
 
-scripts/measure.sh david 1M part001
-scripts/measure.sh jonhoo 1M part001
-scripts/measure.sh david 100M part001
-scripts/measure.sh jonhoo 100M part001
+scripts/measure.sh david 1M part002
+scripts/measure.sh david 100M part002
 
-hdiutil detach /Volumes/RAMDisk        # the 1B run needs the memory
-scripts/measure.sh david 1B part001
-scripts/measure.sh jonhoo 1B part001
+scripts/measure.sh jonhoo 1M part002
+scripts/measure.sh jonhoo 100M part002
+
+hdiutil detach /Volumes/RAMDisk
+
+scripts/measure.sh david 1B part002
+scripts/measure.sh jonhoo 1B part002
 ```
 
 > **Gotcha: the RAM disk isn't guaranteed to stay in RAM.** Its memory is ordinary memory, so
@@ -47,7 +49,7 @@ a second or third run starts from exactly the same state as the first: the 1B fi
 from the SSD, and the 1M and 100M files only from the RAM disk (not from a cached copy left
 by the previous run).
 
-The script writes into `measurements/part001/<size>_<binary>/`:
+The script writes into `measurements/part002/<size>_<binary>/`:
 
 | File | Tool | What it shows |
 |---|---|---|
@@ -58,7 +60,7 @@ The script writes into `measurements/part001/<size>_<binary>/`:
 | `powermetrics.txt` | `sudo powermetrics --samplers cpu_power -i 1000` | frequency and usage of the P- and E-clusters |
 | `memory_before_run.txt`, `memory_after_run.txt` | `memory_pressure`, `sysctl vm.swapusage`, `vm_stat` | memory state before and after |
 
-All raw files are in [`measurements/part001/`](../../measurements/part001/). The outputs of both
+All raw files are in [`measurements/part002/`](../../measurements/part002/). The outputs of both
 versions are **identical** on all three files (`diff` prints nothing).
 
 > **Gotcha:** in zsh, `time` is a shell keyword and doesn't accept flags. `time -l ./brrr`
@@ -148,12 +150,12 @@ priority: a process with the *background* QoS class runs only on the E-cores. So
 version on 100M twice, once normally and once with `taskpolicy -c background`:
 
 ```sh
-scripts/measure.sh david 100M part001
-scripts/measure.sh david 100M part001 e-cores
+scripts/measure.sh david 100M part002
+scripts/measure.sh david 100M part002 e-cores
 ```
 
-Raw output: [`100M_david/`](../../measurements/part001/100M_david/),
-[`100M_david_e-cores/`](../../measurements/part001/100M_david_e-cores/). The output is identical.
+Raw output: [`100M_david/`](../../measurements/part002/100M_david/),
+[`100M_david_e-cores/`](../../measurements/part002/100M_david_e-cores/). The output is identical.
 
 | | Normal (P-cores) | `taskpolicy -c background` (E-cores) | Ratio |
 |---|---|---|---|
@@ -213,19 +215,19 @@ run on the E-cores (~57 s) would be several hundred MB, so I skipped that one.
 
 
 ```sh
-mkdir -p measurements/part001/1M_david_traces
+mkdir -p measurements/part002/1M_david_traces
 sudo purge
 xcrun xctrace record \
   --template 'System Trace' \
-  --output measurements/part001/1M_david_traces/system-trace.trace \
+  --output measurements/part002/1M_david_traces/system-trace.trace \
   --target-stdout /dev/null \
   --launch -- ./target/release/david /Volumes/RAMDisk/1M_measurements.txt
 
-mkdir -p measurements/part001/1M_david_e-cores_traces
+mkdir -p measurements/part002/1M_david_e-cores_traces
 sudo purge
 xcrun xctrace record \
   --template 'System Trace' \
-  --output measurements/part001/1M_david_e-cores_traces/system-trace.trace \
+  --output measurements/part002/1M_david_e-cores_traces/system-trace.trace \
   --target-stdout /dev/null \
   --launch -- /usr/sbin/taskpolicy -c background ./target/release/david /Volumes/RAMDisk/1M_measurements.txt
 ```
@@ -262,11 +264,11 @@ need closed (only the terminal was open), and without touching the Mac during th
 trace is 38 MB:
 
 ```sh
-mkdir -p measurements/part001/100M_david_traces
+mkdir -p measurements/part002/100M_david_traces
 sudo purge
 xcrun xctrace record \
   --template 'System Trace' \
-  --output measurements/part001/100M_david_traces/system-trace.trace \
+  --output measurements/part002/100M_david_traces/system-trace.trace \
   --target-stdout /dev/null \
   --launch -- ./target/release/david /Volumes/RAMDisk/100M_measurements.txt
 ```
@@ -276,7 +278,7 @@ my thread. I count it with my own small tool,
 [`src/analyze/xctrace/`](../../src/analyze/xctrace/), in its `cpu_usage` mode:
 
 ```sh
-xcrun xctrace export --input measurements/part001/100M_david_traces/system-trace.trace \
+xcrun xctrace export --input measurements/part002/100M_david_traces/system-trace.trace \
   --xpath '/trace-toc/run[@number="1"]/data/table[@schema="thread-state"]' > tmp-thread-state-100M.txt
 cargo run --release --bin analyze-xctrace -- tmp-thread-state-100M.txt cpu_usage
 ```
@@ -318,7 +320,7 @@ looks each row's values up. The result:
 
 > **Check it in Instruments.**
 >
-> 1. Open the trace: `open measurements/part001/100M_david_traces/system-trace.trace`.
+> 1. Open the trace: `open measurements/part002/100M_david_traces/system-trace.trace`.
 > 2. In the list of tracks on the left, expand the `david` process and select its
 >    **Main Thread**. Its *Activity* lane shows the thread state over time.
 > 3. The bottom panel switches to **Thread States**: one row per interval, with the columns
@@ -329,7 +331,7 @@ looks each row's values up. The result:
 > Expected: only *CPU 6–9 (P Core)* in the Core column, never an E-core, and *Running* almost
 > all the time.
 
-![Instruments: Thread States of the 100M run](../images/part001-instruments-thread-states.png)
+![Instruments: Thread States of the 100M run](../images/part002-instruments-thread-states.png)
 
 The list shows a pattern that explains the many *Interrupted* intervals in the table above:
 almost exactly **every 1 ms** the thread is interrupted for a fraction of a microsecond
@@ -361,7 +363,7 @@ samples with the same tool as above, in its `code_profile` mode (how to see the 
 in Instruments is right below the table):
 
 ```sh
-xcrun xctrace export --input measurements/part001/100M_david_traces/system-trace.trace \
+xcrun xctrace export --input measurements/part002/100M_david_traces/system-trace.trace \
   --xpath '/trace-toc/run[@number="1"]/data/table[@schema="time-profile"]' > tmp-time-profile-100M.txt
 cargo run --release --bin analyze-xctrace -- tmp-time-profile-100M.txt code_profile
 ```
@@ -401,7 +403,7 @@ What it says:
 
 > **Check it in Instruments.**
 >
-> 1. Open the trace: `open measurements/part001/100M_david_traces/system-trace.trace`.
+> 1. Open the trace: `open measurements/part002/100M_david_traces/system-trace.trace`.
 > 2. Select the `david` process in the list of tracks on the left.
 > 3. In the bottom panel, open the view menu (it shows e.g. *Profile: System Calls*) and pick
 >    **Time Profiler → Profile** (⌘7).
@@ -421,14 +423,14 @@ What it says:
 > same menu. `read` should be at the top with ~139 ms.
 
 So the things to fix first aren't the obvious ones. It's not the float parsing or the file
-reading, but the double map lookup (a single `get_mut` does it once, see [What I learned #3](../part001-first-naive-version.md#3-looking-up-a-station-contains_key--get_mut-entry-or-just-get_mut)), the tree itself (a `HashMap`
+reading, but the double map lookup (a single `get_mut` does it once, see [What I learned #3](../part002-first-naive-version.md#3-looking-up-a-station-contains_key--get_mut-entry-or-just-get_mut)), the tree itself (a `HashMap`
 compares the name once instead of ~10 times) and the `split` into a `Vec` (`split_once`).
 
 > **Why `david::main` is only 71.7 % inclusive, not ~100 %.** Almost everything happens
 > inside my `main`, yet in many samples it's missing from the stack. The normal (not
 > inverted) call tree in Instruments shows it best:
 >
-> ![Instruments: call tree of the 100M run](../images/part001-instruments-call-tree.png)
+> ![Instruments: call tree of the 100M run](../images/part002-instruments-call-tree.png)
 >
 > Under `__rust_begin_short_backtrace` (12.10 s, 100 %) there is `david::main` with 8.67 s,
 > but next to it, as if Rust's runtime had called them directly, also `_platform_memcmp`

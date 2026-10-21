@@ -1,4 +1,5 @@
-use std::{collections::BTreeMap, env};
+use std::env;
+use std::collections::BTreeMap;
 use std::fs::File;
 use std::io::{BufRead, BufReader};
 
@@ -19,29 +20,26 @@ fn main() {
     let mut location_to_measurement: BTreeMap<String, MeasurementStats> = BTreeMap::new();
     for line in reader.lines() {
         let line = line.unwrap();
-        let split = line.split(';').collect::<Vec<&str>>();
-        if split.len() == 2 {
-            let location = split[0];
-            let measurement = &split[1].parse::<f32>().unwrap();
+        let (location, measurement_str) = line.split_once(';').unwrap();
+        let measurement = measurement_str.parse::<f32>().unwrap();
 
-            if location_to_measurement.contains_key(location) {
-                let measurement_stats = location_to_measurement.get_mut(location).unwrap();
-                if measurement_stats.min > *measurement {
-                    measurement_stats.min = *measurement;
-                }
-                if measurement_stats.max < *measurement {
-                    measurement_stats.max = *measurement;
-                }
-                measurement_stats.sum += measurement;
-                measurement_stats.count += 1;
-            } else {
-                location_to_measurement.insert(location.to_string(), MeasurementStats {
-                    min: *measurement,
-                    max: *measurement,
-                    sum: *measurement,
-                    count: 1
-                });
+        if location_to_measurement.contains_key(location) {
+            let measurement_stats = location_to_measurement.get_mut(location).unwrap();
+            if measurement_stats.min > measurement {
+                measurement_stats.min = measurement;
             }
+            if measurement_stats.max < measurement {
+                measurement_stats.max = measurement;
+            }
+            measurement_stats.sum += measurement;
+            measurement_stats.count += 1;
+        } else {
+            location_to_measurement.insert(location.to_string(), MeasurementStats {
+                min: measurement,
+                max: measurement,
+                sum: measurement,
+                count: 1
+            });
         }
     }
 

@@ -25,11 +25,17 @@ How I went about it and how I verified the result.
 
 ## Measurements
 
-| Version | Wall time | Peak memory (RSS) |
-|---------|-----------|-------------------|
-|         |           |                   |
+Measured with [`scripts/measure.sh`](../scripts/measure.sh), the same way as in Part 001
+([How I measure](part001/measurements.md#how-i-measure)). Raw output in
+[`measurements/partNNN/`](../measurements/partNNN/). The output is identical to Jon's on all
+three files.
 
-Setup: machine, `rustc` version, build profile, input size.
+| | `david` 100M | `jonhoo` 100M | `david` 1B | `jonhoo` 1B |
+|---|---|---|---|---|
+| Wall time | | | | |
+| Memory | | | | |
+| Swapped to the SSD | | | | |
+| Instructions per row | | | | |
 
 ## What I learned
 

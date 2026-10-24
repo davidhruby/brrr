@@ -34,6 +34,7 @@ Notes mostly for myself, not needed to follow the parts:
   100M and 1B input files.
 - [My machine](notes/my-machine.md): the laptop all numbers come from, its CPU, caches, SSD and
   RAM.
+- [Rust](notes/rust.md): general notes about Rust, starting with its history.
 
 ## Adding a new entry
 

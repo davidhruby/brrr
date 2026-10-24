@@ -23,24 +23,18 @@ fn main() {
         let (location, measurement_str) = line.split_once(';').unwrap();
         let measurement = measurement_str.parse::<f32>().unwrap();
 
-        if location_to_measurement.contains_key(location) {
-            let measurement_stats = location_to_measurement.get_mut(location).unwrap();
-            if measurement_stats.min > measurement {
-                measurement_stats.min = measurement;
-            }
-            if measurement_stats.max < measurement {
-                measurement_stats.max = measurement;
-            }
-            measurement_stats.sum += measurement;
-            measurement_stats.count += 1;
-        } else {
-            location_to_measurement.insert(location.to_string(), MeasurementStats {
-                min: measurement,
-                max: measurement,
-                sum: measurement,
-                count: 1
-            });
-        }
+        location_to_measurement.entry(location.to_string())
+            .and_modify(| ltm| {
+                ltm.min = ltm.min.min(measurement);
+                ltm.max = ltm.max.max(measurement);
+                ltm.sum += measurement;
+                ltm.count += 1;
+            }).or_insert(MeasurementStats {
+            min: measurement,
+            max: measurement,
+            sum: measurement,
+            count: 1
+        });
     }
 
     for (location, stats) in location_to_measurement.iter() {

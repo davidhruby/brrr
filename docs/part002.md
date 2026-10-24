@@ -1,4 +1,4 @@
-# Part 002 — `BufReader` and `split_once`
+# Part 002 — Next steps from Part 001
 
 **Dates:** 2026-10-21 – 2026-10-21
 **Video progress:** stopped at [38:38](https://www.youtube.com/watch?v=tCY7p6dVAGE&t=2318s) when this part was published
@@ -68,8 +68,8 @@ let (location, measurement_str) = line.split_once(';').unwrap();
 let measurement = measurement_str.parse::<f32>().unwrap();
 ```
 
-Measurements after this change (raw output in
-[`measurements/part002/`](../measurements/part002/)):
+Measurements after this change (raw output from commit
+[`c1b3808`](https://github.com/davidhruby/brrr/tree/c1b3808/measurements/part002)):
 
 | | `david` 100M | `jonhoo` 100M | `david` 1B | `jonhoo` 1B |
 |---|---|---|---|---|
@@ -81,6 +81,67 @@ Measurements after this change (raw output in
 `split_once` took back almost exactly what `BufReader` added: ~540 instructions per row less
 (−22 %) and 15 % fewer CPU cycles, by dropping the `Vec` allocation per line and the search
 for a second `;`. 1B got another 14 % faster.
+
+### 3. `entry().and_modify().or_insert()` and `.min()` / `.max()`
+
+Steps 3 and 4 of the [Next steps from Part 001](part001-first-naive-version.md#next-steps): one
+lookup in the map instead of two, a new station gets its first measurement directly, and
+`.min()` / `.max()` instead of the `if` comparisons.
+
+Before:
+
+```rust
+if location_to_measurement.contains_key(location) {
+    let measurement_stats = location_to_measurement.get_mut(location).unwrap();
+    if measurement_stats.min > measurement {
+        measurement_stats.min = measurement;
+    }
+    if measurement_stats.max < measurement {
+        measurement_stats.max = measurement;
+    }
+    measurement_stats.sum += measurement;
+    measurement_stats.count += 1;
+} else {
+    location_to_measurement.insert(location.to_string(), MeasurementStats {
+        min: measurement,
+        max: measurement,
+        sum: measurement,
+        count: 1
+    });
+}
+```
+
+After:
+
+```rust
+location_to_measurement.entry(location.to_string())
+    .and_modify(| ltm| {
+        ltm.min = ltm.min.min(measurement);
+        ltm.max = ltm.max.max(measurement);
+        ltm.sum += measurement;
+        ltm.count += 1;
+    }).or_insert(MeasurementStats {
+    min: measurement,
+    max: measurement,
+    sum: measurement,
+    count: 1
+});
+```
+
+Measurements after this change (raw output in
+[`measurements/part002/`](../measurements/part002/)):
+
+| | `david` 100M | `jonhoo` 100M | `david` 1B | `jonhoo` 1B |
+|---|---|---|---|---|
+| Wall time | 10.7 s | 10.6 s | 109 s | 107 s |
+| Memory | 1.9 MB | 1.9 MB | 1.9 MB | 1.9 MB |
+| Swapped to the SSD | 0 | 0 | 0 | 0 |
+| Instructions per row | ~1,840 | ~1,800 | ~1,860 | ~1,840 |
+
+**My version is now almost as fast as Jon's**, about 1–2 % slower (100M 12.3 s → 10.7 s,
+1B 126 s → 109 s): ~140
+instructions per row less and 11 % fewer CPU cycles. `entry(location.to_string())` allocates
+a `String` for every line, even for a station that's already in the map.
 
 ## What I learned
 

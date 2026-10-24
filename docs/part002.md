@@ -1,6 +1,6 @@
 # Part 002 — Next steps from Part 001
 
-**Dates:** 2026-10-21 – 2026-10-21
+**Dates:** 2026-10-21 – 2026-10-25
 **Video progress:** stopped at [38:38](https://www.youtube.com/watch?v=tCY7p6dVAGE&t=2318s) when this part was published
 **Code:** git tag [`part002`](https://github.com/davidhruby/brrr/tree/part002). To get the code exactly as it was for this part: `git checkout part002`
 
@@ -193,8 +193,8 @@ location_to_measurement.entry(location.to_string())
     .or_insert_with(|| MeasurementStats::new(measurement));
 ```
 
-Measurements after this change (raw output in
-[`measurements/part002/`](../measurements/part002/)):
+Measurements after this change (raw output from commit
+[`99e88e4`](https://github.com/davidhruby/brrr/tree/99e88e4/measurements/part002)):
 
 | | `david` 100M | `jonhoo` 100M | `david` 1B | `jonhoo` 1B |
 |---|---|---|---|---|
@@ -203,8 +203,43 @@ Measurements after this change (raw output in
 | Swapped to the SSD | 0 | 0 | 0 | 0 |
 | Instructions per row | ~1,840 | ~1,800 | ~1,860 | ~1,840 |
 
-**No change in speed**, same instructions per row as before: the compiler inlines the small
-methods, so moving the code into the struct costs nothing.
+**No change in speed.**
+
+### 5. Destructuring and captured names in `println!`
+
+Step 6 of the [Next steps from Part 001](part001-first-naive-version.md#next-steps): the output
+loop takes the struct apart into plain variables right in the `for` pattern, computes the mean
+into its own variable, and the format string reads like the output instead of counting
+positions.
+
+Before:
+
+```rust
+for (location, stats) in location_to_measurement.iter() {
+    println!("{}={1:.1}/{2:.1}/{3:.1}", location, stats.min, stats.sum / stats.count as f32, stats.max);
+}
+```
+
+After:
+
+```rust
+for (location, MeasurementStats { min, max, sum, count}) in location_to_measurement.iter() {
+    let mean = sum / (*count as f32);
+    println!("{location}={min:.1}/{mean:.1}/{max:.1}");
+}
+```
+
+Measurements after this change (raw output in
+[`measurements/part002/`](../measurements/part002/)):
+
+| | `david` 100M | `jonhoo` 100M | `david` 1B | `jonhoo` 1B |
+|---|---|---|---|---|
+| Wall time | 10.6 s | 10.6 s | 109 s | 107 s |
+| Memory | 1.9 MB | 1.9 MB | 1.9 MB | 1.9 MB |
+| Swapped to the SSD | 0 | 0 | 0 | 0 |
+| Instructions per row | ~1,840 | ~1,800 | ~1,860 | ~1,840 |
+
+**No change in speed.**
 
 ## What I learned
 

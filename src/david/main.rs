@@ -46,7 +46,8 @@ fn main() {
             .or_insert_with(|| MeasurementStats::new(measurement));
     }
 
-    for (location, stats) in location_to_measurement.iter() {
-        println!("{}={1:.1}/{2:.1}/{3:.1}", location, stats.min, stats.sum / stats.count as f32, stats.max);
+    for (location, MeasurementStats { min, max, sum, count}) in location_to_measurement.iter() {
+        let mean = sum / (*count as f32);
+        println!("{location}={min:.1}/{mean:.1}/{max:.1}");
     }
 }

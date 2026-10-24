@@ -1,26 +1,26 @@
-Sat Oct 24 09:04:14 CEST 2026
-System-wide memory free percentage: 65%
-vm.swapusage: total = 2048.00M  used = 439.06M  free = 1608.94M  (encrypted)
+Sat Oct 24 10:15:05 CEST 2026
+System-wide memory free percentage: 69%
+vm.swapusage: total = 2048.00M  used = 367.06M  free = 1680.94M  (encrypted)
 Mach Virtual Memory Statistics: (page size of 16384 bytes)
-Pages free:                                    72002.
-Pages active:                                 249892.
-Pages inactive:                               306425.
-Pages speculative:                             31254.
+Pages free:                                    53004.
+Pages active:                                 287163.
+Pages inactive:                               316480.
+Pages speculative:                             42872.
 Pages throttled:                                   0.
-Pages wired down:                             147094.
-Pages purgeable:                               17306.
-"Translation faults":                     1102080994.
-Pages copy-on-write:                        30001577.
-Pages zero filled:                         742377402.
-Pages reactivated:                         149948728.
-Pages purged:                               24974612.
-File-backed pages:                            152529.
-Anonymous pages:                              435042.
-Pages stored in compressor:                  1053193.
-Pages occupied by compressor:                 202352.
-Decompressions:                            163547774.
-Compressions:                              198792778.
-Pageins:                                    99472676.
-Pageouts:                                     748239.
-Swapins:                                    15145822.
+Pages wired down:                             146682.
+Pages purgeable:                               14721.
+"Translation faults":                     1120726425.
+Pages copy-on-write:                        30638297.
+Pages zero filled:                         749183871.
+Pages reactivated:                         151146153.
+Pages purged:                               25058556.
+File-backed pages:                            173438.
+Anonymous pages:                              473077.
+Pages stored in compressor:                   940953.
+Pages occupied by compressor:                 163113.
+Decompressions:                            164430702.
+Compressions:                              199755128.
+Pageins:                                   105220972.
+Pageouts:                                     757246.
+Swapins:                                    15150922.
 Swapouts:                                   17806835.

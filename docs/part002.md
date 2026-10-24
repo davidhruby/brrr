@@ -128,8 +128,8 @@ location_to_measurement.entry(location.to_string())
 });
 ```
 
-Measurements after this change (raw output in
-[`measurements/part002/`](../measurements/part002/)):
+Measurements after this change (raw output from commit
+[`f0d4dfd`](https://github.com/davidhruby/brrr/tree/f0d4dfd/measurements/part002)):
 
 | | `david` 100M | `jonhoo` 100M | `david` 1B | `jonhoo` 1B |
 |---|---|---|---|---|
@@ -143,7 +143,138 @@ Measurements after this change (raw output in
 instructions per row less and 11 % fewer CPU cycles. `entry(location.to_string())` allocates
 a `String` for every line, even for a station that's already in the map.
 
+### 4. Methods `new` and `update` on `MeasurementStats`
+
+Step 5 of the [Next steps from Part 001](part001-first-naive-version.md#next-steps): the update
+logic moved into the struct, and the loop just calls it. `or_insert_with` only creates a new
+`MeasurementStats` for a new station (see [What I learned #1](#1-arguments-are-evaluated-before-the-call-or_insert-vs-or_insert_with)).
+
+Before:
+
+```rust
+location_to_measurement.entry(location.to_string())
+    .and_modify(| ltm| {
+        ltm.min = ltm.min.min(measurement);
+        ltm.max = ltm.max.max(measurement);
+        ltm.sum += measurement;
+        ltm.count += 1;
+    }).or_insert(MeasurementStats {
+    min: measurement,
+    max: measurement,
+    sum: measurement,
+    count: 1
+});
+```
+
+After:
+
+```rust
+impl MeasurementStats {
+    fn new(measurement: f32) -> Self {
+        Self {
+            min: measurement,
+            max: measurement,
+            sum: measurement,
+            count: 1
+        }
+    }
+
+    fn update(&mut self, measurement: f32) {
+        self.min = self.min.min(measurement);
+        self.max = self.max.max(measurement);
+        self.sum += measurement;
+        self.count += 1;
+    }
+}
+
+// in the loop:
+location_to_measurement.entry(location.to_string())
+    .and_modify(|m| m.update(measurement))
+    .or_insert_with(|| MeasurementStats::new(measurement));
+```
+
+Measurements after this change (raw output in
+[`measurements/part002/`](../measurements/part002/)):
+
+| | `david` 100M | `jonhoo` 100M | `david` 1B | `jonhoo` 1B |
+|---|---|---|---|---|
+| Wall time | 10.7 s | 10.6 s | 108 s | 107 s |
+| Memory | 1.9 MB | 1.9 MB | 1.8 MB | 1.9 MB |
+| Swapped to the SSD | 0 | 0 | 0 | 0 |
+| Instructions per row | ~1,840 | ~1,800 | ~1,860 | ~1,840 |
+
+**No change in speed**, same instructions per row as before: the compiler inlines the small
+methods, so moving the code into the struct costs nothing.
+
 ## What I learned
+
+### 1. Arguments are evaluated before the call: `or_insert` vs `or_insert_with`
+
+In a chain like this, **every method is always called**. `and_modify` doesn't skip anything;
+it hands the same `Entry` on, and each method checks for itself whether the key exists:
+
+```rust
+location_to_measurement.entry(location.to_string())
+    .and_modify(|m| m.update(measurement))
+    .or_insert(MeasurementStats::new(measurement));
+```
+
+And Rust evaluates a method's arguments before calling it. So `MeasurementStats::new(measurement)`
+runs on every line, and `or_insert` throws the result away when the station is already in the
+map. Only the insert itself happens just for a new station.
+
+`or_insert_with` takes a closure instead of a value, a recipe for making the value, and only
+calls it when the key is new:
+
+| | Station already in the map | New station |
+|---|---|---|
+| `and_modify(...)` | called, updates the value | called, does nothing |
+| `or_insert(new(...))` | called, `new` **runs** and the result is thrown away | called, `new` runs and the result is inserted |
+| `or_insert_with(\|\| new(...))` | called, the closure is **not** called | called, the closure runs and the result is inserted |
+
+**So I expected a saving, and got none.** Filling in the four fields of `MeasurementStats` is
+roughly 4 instructions, so switching to `or_insert_with` should save ~4 instructions per line,
+~4 billion on the 1B file. I measured both versions with `/usr/bin/time -l` (on a variant of my
+code with a `HashMap`): the difference was only 0.98 billion instructions (0.064 %). That's
+noise: the same binary already varies by tens of millions of instructions between runs.
+
+The assembly explains why. I generated it for both versions and compared them:
+
+```sh
+# with or_insert
+cargo asm --bin david david::main --rust > or_insert.s
+# with or_insert_with
+cargo asm --bin david david::main --rust > or_insert_with.s
+
+diff or_insert.s or_insert_with.s    # no output: identical
+```
+
+**The compiler produced exactly the same machine code for both.** In it, the new
+`MeasurementStats` is only written in the block for a missing key, which the program only
+reaches after the hash table lookup hits an empty slot:
+
+```asm
+	stp  w24, w24, [x9, #-16]    // min = measurement, max = measurement
+	mov  w22, #1
+	stp  w24, w22, [x9, #-8]     // sum = measurement, count = 1
+```
+
+On the common path, a station that's already in the map, it's never built. Building it has no
+side effects, so the compiler moved it into that branch on its own: the eager `or_insert`
+already behaves like `or_insert_with`. Jon's `.or_insert((f64::MAX, 0., 0, f64::MIN))`, four
+constants, is free for the same reason. `or_insert_with` is still the better way to write it,
+because it says what I mean and doesn't rely on the optimizer; with an expensive default (an
+allocation, I/O) the difference would be real.
+
+That's exactly the case one step earlier: `location.to_string()`, the argument of `entry`, is
+evaluated on every line too, and that one **allocates a `String`** each time, even for a
+station that's already in the map. An allocation is a side effect (a call to the allocator),
+so the compiler can't skip it. In the assembly it shows up as `__rust_alloc` + `memcpy` before
+the lookup and `__rust_dealloc` right after the key is found.
+
+The same value / closure pairs show up all over Rust: `unwrap_or` / `unwrap_or_else`,
+`ok_or` / `ok_or_else`. `cargo clippy` warns about the eager version (`or_fun_call`) when a
+function call is passed where a closure would do.
 
 ## Next steps
 

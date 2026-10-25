@@ -84,8 +84,8 @@ let stats = BTreeMap::from_iter(stats);
 for (location, MeasurementStats { min, max, sum, count}) in stats.iter() {
 ```
 
-Measurements after this change (raw output in
-[`measurements/part003/`](../measurements/part003/)):
+Measurements after this change (raw output from commit
+[`1396548`](https://github.com/davidhruby/brrr/tree/1396548/measurements/part003)):
 
 | | `david` 100M | `david` 1B |
 |---|---|---|
@@ -97,6 +97,73 @@ Measurements after this change (raw output in
 **28–29 % faster** (100M 10.7 s → 7.6 s, 1B 108 s → 77 s), but only ~15 % fewer instructions
 (~280 per row less). The CPU also runs the remaining instructions faster: 5.0 instructions per
 cycle instead of 4.3 (why is in the [TODO](#todo)).
+
+### 3. `get_mut` first: no new `String` for every line
+
+`entry(station.to_string())` allocated a new `String` on every line, only to throw it away
+when the station was already in the map (see
+[Part 002, What I learned #1](part002-just-poslishments.md#1-arguments-are-evaluated-before-the-call-or_insert-vs-or_insert_with)).
+Now the loop first looks the station up with `get_mut`, which takes the `&str` from the line
+as it is. Only for a new station, 413 times in total, it creates the `String` and inserts it.
+A new station starts from neutral values (`Default`), and the same `update` then runs for
+every line.
+
+Before:
+
+```rust
+impl MeasurementStats {
+    fn new(measurement: f32) -> Self {
+        Self {
+            min: measurement,
+            max: measurement,
+            sum: measurement,
+            count: 1
+        }
+    }
+    // ...
+}
+
+// in the loop:
+stats.entry(station.to_string())
+    .and_modify(|m| m.update(temperature))
+    .or_insert_with(|| MeasurementStats::new(temperature));
+```
+
+After:
+
+```rust
+impl Default for MeasurementStats {
+    fn default() -> Self {
+        MeasurementStats {
+            min: f32::MAX,
+            max: f32::MIN,
+            sum: 0f32,
+            count: 0u32
+        }
+    }
+}
+
+// in the loop:
+let stat = match stats.get_mut(station) {
+    Some(stat) => stat,
+    None => stats.entry(station.to_string()).or_insert(MeasurementStats::default())
+};
+stat.update(temperature);
+```
+
+Measurements after this change (raw output in
+[`measurements/part003/`](../measurements/part003/)):
+
+| | `david` 100M | `david` 1B |
+|---|---|---|
+| Wall time | 6.4 s | 66 s |
+| Memory | 1.9 MB | 1.9 MB |
+| Swapped to the SSD | 0 | 0 |
+| Instructions per row | ~1,200 | ~1,200 |
+
+**14–16 % faster** (100M 7.6 s → 6.4 s, 1B 77 s → 66 s) and ~360 instructions per row less
+(−23 %): the allocation, the copy of the name and the deallocation on every line are gone.
+
 
 ## What I learned
 

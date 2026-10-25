@@ -23,13 +23,9 @@ cargo build --release
 scripts/measure.sh david 1M part003
 scripts/measure.sh david 100M part003
 
-scripts/measure.sh jonhoo 1M part003
-scripts/measure.sh jonhoo 100M part003
-
 hdiutil detach /Volumes/RAMDisk
 
 scripts/measure.sh david 1B part003
-scripts/measure.sh jonhoo 1B part003
 ```
 
 > **Gotcha: the RAM disk isn't guaranteed to stay in RAM.** Its memory is ordinary memory, so

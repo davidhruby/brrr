@@ -11,20 +11,22 @@ struct MeasurementStats {
 }
 
 impl MeasurementStats {
-    fn new(measurement: f32) -> Self {
-        Self {
-            min: measurement,
-            max: measurement,
-            sum: measurement,
-            count: 1
-        }
-    }
-
     fn update(&mut self, measurement: f32) {
         self.min = self.min.min(measurement);
         self.max = self.max.max(measurement);
         self.sum += measurement;
         self.count += 1;
+    }
+}
+
+impl Default for MeasurementStats {
+    fn default() -> Self {
+        MeasurementStats {
+            min: f32::MAX,
+            max: f32::MIN,
+            sum: 0f32,
+            count: 0u32
+        }
     }
 }
 
@@ -41,9 +43,11 @@ fn main() {
         let (station, temperature) = line.split_once(';').unwrap();
         let temperature = temperature.parse::<f32>().unwrap();
 
-        stats.entry(station.to_string())
-            .and_modify(|m| m.update(temperature))
-            .or_insert_with(|| MeasurementStats::new(temperature));
+        let stat = match stats.get_mut(station) {
+            Some(stat) => stat,
+            None => stats.entry(station.to_string()).or_insert(MeasurementStats::default())
+        };
+        stat.update(temperature);
     }
 
     let stats = BTreeMap::from_iter(stats);

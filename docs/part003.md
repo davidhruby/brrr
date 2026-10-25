@@ -214,8 +214,8 @@ for line in reader.split(b'\n') {
 let stats = BTreeMap::from_iter(stats.into_iter().map(|(k, v)| (String::from_utf8(k).unwrap(), v)));
 ```
 
-Measurements after this change (raw output in
-[`measurements/part003/`](../measurements/part003/)):
+Measurements after this change (the raw output wasn't kept: changes 4 and 5 are one commit,
+and the measurements of change 5 overwrote these):
 
 | | `david` 100M | `david` 1B |
 |---|---|---|
@@ -252,8 +252,8 @@ let temperature = unsafe { str::from_utf8_unchecked(fields.next().unwrap()).pars
 let stats = BTreeMap::from_iter(stats.into_iter().map(|(k, v)| (unsafe { String::from_utf8_unchecked(k) }, v)));
 ```
 
-Measurements after this change (raw output in
-[`measurements/part003/`](../measurements/part003/)):
+Measurements after this change (raw output from commit
+[`84de20a`](https://github.com/davidhruby/brrr/tree/84de20a/measurements/part003)):
 
 | | `david` 100M | `david` 1B |
 |---|---|---|
@@ -266,8 +266,53 @@ Measurements after this change (raw output in
 (−5 %): checking the ≤ 5 bytes of the temperature cost that much on every line. The check of
 the station names at the end runs only 413 times, so it doesn't matter.
 
+### 6. Release profile: `lto = "fat"`
 
+So far every build used the default release profile. Now `Cargo.toml` has its own one:
 
+```toml
+[profile.release]
+lto = "fat"
+panic = "abort"
+debug = "full"
+overflow-checks = false
+```
+
+`lto = "fat"` turns on link-time optimization: when linking, LLVM gets the code of all crates
+at once (mine, `std`, `core`) and optimizes it as one whole. Without it, a function from
+another crate that isn't generic or `#[inline]` stays a normal call; with it, LLVM can inline
+it into my loop too.
+
+I added the options one by one and measured only the 1B file after each:
+
+| Profile | 1B wall time |
+|---|---|
+| default | 51.7 s |
+| `lto = "fat"` | 48.6 s |
+| + `panic = "abort"` | 49.1 s |
+| + `debug = "full"` | 49.5 s |
+| + `overflow-checks = false` | 48.9 s |
+
+Measurements with all four options (raw output in
+[`measurements/part003/`](../measurements/part003/), only the 1B run):
+
+| | `david` 1B |
+|---|---|
+| Wall time | 49 s |
+| Memory | 1.8 MB |
+| Swapped to the SSD | 0 |
+| Instructions per row | ~940 |
+
+**Only `lto = "fat"` helps: ~6 % faster** (1B 52 s → 49 s), ~110 instructions per row less
+(−11 %) and 7 % fewer CPU cycles. The other three are within the noise of a single run:
+
+- `panic = "abort"` ends the program on a panic instead of unwinding the stack. The
+  unwinding code is never on the hot path, so it doesn't change the speed, only the size of
+  the binary.
+- `debug = "full"` only adds information for debuggers and profilers, the generated code
+  stays the same. Useful for Instruments and `cargo asm`.
+- `overflow-checks = false` is already the default of the release profile, so it changes
+  nothing.
 
 ## What I learned
 
@@ -295,12 +340,6 @@ part of the stream, and I don't want to get ahead of him.
   collects the lines in a buffer and writes them in a few big calls. With 413 lines it
   doesn't matter yet, but with a bigger output (up to 10,000 stations by the rules) or a
   faster program it will.
-- **Look at the release profile.** All my measurements use `cargo build --release` with the
-  default settings. Cargo lets the `[profile.release]` section in `Cargo.toml` change how the
-  code is compiled, e.g. `opt-level`, and further options such as `lto` (link-time
-  optimization) or `codegen-units`. See
-  [Customizing Builds with Release Profiles](https://doc.rust-lang.org/book/ch14-01-release-profiles.html)
-  in the Rust book, and measure whether any of it makes a difference.
 - **Pin the program to one core on Linux** (`taskset`) and see whether the jumps between
   cores cost anything measurable (see [Something to try later](part001/measurements.md#exact-check-with-instruments)).
 - **Find out why the `HashMap` version runs more instructions per cycle** (5.0 instead of 4.3,

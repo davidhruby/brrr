@@ -1,5 +1,5 @@
 use std::env;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 use std::fs::File;
 use std::io::{BufRead, BufReader};
 
@@ -35,7 +35,7 @@ fn main() {
     let file = File::open(input_file_path).unwrap();
     let reader = BufReader::new(file);
 
-    let mut stats: BTreeMap<String, MeasurementStats> = BTreeMap::new();
+    let mut stats: HashMap<String, MeasurementStats> = HashMap::new();
     for line in reader.lines() {
         let line = line.unwrap();
         let (station, temperature) = line.split_once(';').unwrap();
@@ -46,6 +46,7 @@ fn main() {
             .or_insert_with(|| MeasurementStats::new(temperature));
     }
 
+    let stats = BTreeMap::from_iter(stats);
     for (location, MeasurementStats { min, max, sum, count}) in stats.iter() {
         let mean = sum / (*count as f32);
         println!("{location}={min:.1}/{mean:.1}/{max:.1}");

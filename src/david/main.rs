@@ -1,4 +1,4 @@
-use std::env;
+use std::{env, str};
 use std::collections::{BTreeMap, HashMap};
 use std::fs::File;
 use std::io::{BufRead, BufReader};
@@ -37,20 +37,21 @@ fn main() {
     let file = File::open(input_file_path).unwrap();
     let reader = BufReader::new(file);
 
-    let mut stats: HashMap<String, MeasurementStats> = HashMap::new();
-    for line in reader.lines() {
+    let mut stats: HashMap<Vec<u8>, MeasurementStats> = HashMap::new();
+    for line in reader.split(b'\n') {
         let line = line.unwrap();
-        let (station, temperature) = line.split_once(';').unwrap();
-        let temperature = temperature.parse::<f32>().unwrap();
+        let mut fields = line.rsplitn(2, |c| *c == b';');
+        let temperature = unsafe { str::from_utf8_unchecked(fields.next().unwrap()).parse::<f32>().unwrap() };
+        let station = fields.next().unwrap();
 
         let stat = match stats.get_mut(station) {
             Some(stat) => stat,
-            None => stats.entry(station.to_string()).or_insert(MeasurementStats::default())
+            None => stats.entry(station.to_vec()).or_insert(MeasurementStats::default())
         };
         stat.update(temperature);
     }
 
-    let stats = BTreeMap::from_iter(stats);
+    let stats = BTreeMap::from_iter(stats.into_iter().map(|(k, v)| (unsafe { String::from_utf8_unchecked(k) }, v)));
     for (location, MeasurementStats { min, max, sum, count}) in stats.iter() {
         let mean = sum / (*count as f32);
         println!("{location}={min:.1}/{mean:.1}/{max:.1}");

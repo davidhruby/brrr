@@ -151,8 +151,8 @@ let stat = match stats.get_mut(station) {
 stat.update(temperature);
 ```
 
-Measurements after this change (raw output in
-[`measurements/part003/`](../measurements/part003/)):
+Measurements after this change (raw output from commit
+[`2f17eee`](https://github.com/davidhruby/brrr/tree/2f17eee/measurements/part003)):
 
 | | `david` 100M | `david` 1B |
 |---|---|---|
@@ -163,6 +163,110 @@ Measurements after this change (raw output in
 
 **14–16 % faster** (100M 7.6 s → 6.4 s, 1B 77 s → 66 s) and ~360 instructions per row less
 (−23 %): the allocation, the copy of the name and the deallocation on every line are gone.
+
+### 4. Bytes instead of strings: `Vec<u8>` keys
+
+The loop now works with raw bytes (`&[u8]`) instead of `&str`, so it doesn't check that every
+line is valid UTF-8. `reader.split(b'\n')` gives each line as a `Vec<u8>` (still a new
+allocation per line, like `lines()`), and `rsplitn(2, ...)` looks for the `;` from the end of
+the line, where the temperature is at most 5 bytes long, so it's found after a few bytes
+instead of after the whole station name. The first item from the right is the temperature,
+the second the station. Only the temperature is checked as UTF-8, because `parse` needs a
+`&str`. The keys of the map are `Vec<u8>`, and they become `String`s only at the end, for
+the 413 stations of the sorted output.
+
+Before:
+
+```rust
+let mut stats: HashMap<String, MeasurementStats> = HashMap::new();
+for line in reader.lines() {
+    let line = line.unwrap();
+    let (station, temperature) = line.split_once(';').unwrap();
+    let temperature = temperature.parse::<f32>().unwrap();
+
+    let stat = match stats.get_mut(station) {
+        Some(stat) => stat,
+        None => stats.entry(station.to_string()).or_insert(MeasurementStats::default())
+    };
+    stat.update(temperature);
+}
+
+let stats = BTreeMap::from_iter(stats);
+```
+
+After:
+
+```rust
+let mut stats: HashMap<Vec<u8>, MeasurementStats> = HashMap::new();
+for line in reader.split(b'\n') {
+    let line = line.unwrap();
+    let mut fields = line.rsplitn(2, |c| *c == b';');
+    let temperature = str::from_utf8(fields.next().unwrap()).unwrap().parse::<f32>().unwrap();
+    let station = fields.next().unwrap();
+
+    let stat = match stats.get_mut(station) {
+        Some(stat) => stat,
+        None => stats.entry(station.to_vec()).or_insert(MeasurementStats::default())
+    };
+    stat.update(temperature);
+}
+
+let stats = BTreeMap::from_iter(stats.into_iter().map(|(k, v)| (String::from_utf8(k).unwrap(), v)));
+```
+
+Measurements after this change (raw output in
+[`measurements/part003/`](../measurements/part003/)):
+
+| | `david` 100M | `david` 1B |
+|---|---|---|
+| Wall time | 5.5 s | 53 s |
+| Memory | 1.9 MB | 1.8 MB |
+| Swapped to the SSD | 0 | 0 |
+| Instructions per row | ~1,100 | ~1,110 |
+
+**15–20 % faster** (100M 6.4 s → 5.5 s, 1B 66 s → 53 s), but only ~8 % fewer instructions
+(~95 per row less). Most of the gain is in the CPU cycles (−17 % on 100M, −20 % on 1B): 5.1
+instructions per cycle instead of 4.5.
+
+### 5. `from_utf8_unchecked`: no UTF-8 check at all
+
+The temperature and, at the end, the station names are turned into `str` / `String` without
+checking that they are valid UTF-8. `from_utf8_unchecked` is `unsafe`: if the bytes weren't
+valid UTF-8, the program would have undefined behavior instead of stopping with an error. The
+rules of the challenge guarantee a UTF-8 input, and a temperature is only ASCII digits, `-`
+and `.`, so here it's safe.
+
+Before:
+
+```rust
+let temperature = str::from_utf8(fields.next().unwrap()).unwrap().parse::<f32>().unwrap();
+// ...
+let stats = BTreeMap::from_iter(stats.into_iter().map(|(k, v)| (String::from_utf8(k).unwrap(), v)));
+```
+
+After:
+
+```rust
+let temperature = unsafe { str::from_utf8_unchecked(fields.next().unwrap()).parse::<f32>().unwrap() };
+// ...
+let stats = BTreeMap::from_iter(stats.into_iter().map(|(k, v)| (unsafe { String::from_utf8_unchecked(k) }, v)));
+```
+
+Measurements after this change (raw output in
+[`measurements/part003/`](../measurements/part003/)):
+
+| | `david` 100M | `david` 1B |
+|---|---|---|
+| Wall time | 5.1 s | 52 s |
+| Memory | 1.9 MB | 1.8 MB |
+| Swapped to the SSD | 0 | 0 |
+| Instructions per row | ~1,050 | ~1,050 |
+
+**3–7 % faster** (100M 5.5 s → 5.1 s, 1B 53 s → 52 s) and ~50 instructions per row less
+(−5 %): checking the ≤ 5 bytes of the temperature cost that much on every line. The check of
+the station names at the end runs only 413 times, so it doesn't matter.
+
+
 
 
 ## What I learned

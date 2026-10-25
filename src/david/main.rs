@@ -35,18 +35,18 @@ fn main() {
     let file = File::open(input_file_path).unwrap();
     let reader = BufReader::new(file);
 
-    let mut location_to_measurement: BTreeMap<String, MeasurementStats> = BTreeMap::new();
+    let mut stats: BTreeMap<String, MeasurementStats> = BTreeMap::new();
     for line in reader.lines() {
         let line = line.unwrap();
-        let (location, measurement_str) = line.split_once(';').unwrap();
-        let measurement = measurement_str.parse::<f32>().unwrap();
+        let (station, temperature) = line.split_once(';').unwrap();
+        let temperature = temperature.parse::<f32>().unwrap();
 
-        location_to_measurement.entry(location.to_string())
-            .and_modify(|m| m.update(measurement))
-            .or_insert_with(|| MeasurementStats::new(measurement));
+        stats.entry(station.to_string())
+            .and_modify(|m| m.update(temperature))
+            .or_insert_with(|| MeasurementStats::new(temperature));
     }
 
-    for (location, MeasurementStats { min, max, sum, count}) in location_to_measurement.iter() {
+    for (location, MeasurementStats { min, max, sum, count}) in stats.iter() {
         let mean = sum / (*count as f32);
         println!("{location}={min:.1}/{mean:.1}/{max:.1}");
     }

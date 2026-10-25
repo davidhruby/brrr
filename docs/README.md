@@ -17,7 +17,7 @@ Each part covers one step of the video and can span several days. It records:
 | –    |                           | [Introduction](intro.md): what this is about, the challenge, setup, my machine, approach | |
 | 001  | 2026-10-15 – 2026-10-20   | [The first naive version](part001-first-naive-version.md) | [`part001`](https://github.com/davidhruby/brrr/tree/part001) |
 | 002  | 2026-10-21 – 2026-10-25   | [Next steps from Part 001](part002-just-poslishments.md) | [`part002`](https://github.com/davidhruby/brrr/tree/part002) |
-| 003  | 2026-10-25 – 2026-10-25   | [In progress](part003.md) | [`part003`](https://github.com/davidhruby/brrr/tree/part003) |
+| 003  | 2026-10-25 – 2026-10-25   | [HashMap, bytes and LTO](part003-hashmap-bytes-and-lto.md) | [`part003`](https://github.com/davidhruby/brrr/tree/part003) |
 
 Every part has a git tag with the code as it was at the end of that part. To see it:
 

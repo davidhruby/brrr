@@ -1,7 +1,7 @@
-# Part 003
+# Part 003 — HashMap, bytes and LTO
 
 **Dates:** 2026-10-25 – 2026-10-25
-**Video progress:** stopped at [43:19](https://www.youtube.com/watch?v=tCY7p6dVAGE&t=2599s) when this part was published
+**Video progress:** stopped at [57:56](https://www.youtube.com/watch?v=tCY7p6dVAGE&t=3476s) when this part was published
 **Code:** git tag [`part003`](https://github.com/davidhruby/brrr/tree/part003). To get the code exactly as it was for this part: `git checkout part003`
 
 New here? Start with the [Introduction](intro.md).

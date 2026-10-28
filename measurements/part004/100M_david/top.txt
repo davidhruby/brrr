@@ -1,51 +1,51 @@
-Processes: 709 total, 4 running, 2 stuck, 703 sleeping, 3021 threads 
-2026/10/28 09:54:10
-Load Avg: 2.01, 1.73, 1.74 
-CPU usage: 12.25% user, 23.22% sys, 64.51% idle 
-SharedLibs: 139M resident, 16M data, 30M linkedit.
-MemRegions: 143321 total, 8935M resident, 350M private, 870M shared.
-PhysMem: 15G used (2886M wired, 1865M compressor), 396M unused.
-VM: 289T vsize, 6144M framework vsize, 15154839(0) swapins, 17807215(0) swapouts.
-Networks: packets: 50301940/55G in, 41015322/37G out.
-Disks: 81885800/2850G read, 37441346/786G written.
+Processes: 692 total, 3 running, 689 sleeping, 2922 threads 
+2026/10/28 10:07:32
+Load Avg: 1.53, 1.64, 1.69 
+CPU usage: 12.67% user, 19.71% sys, 67.60% idle 
+SharedLibs: 120M resident, 15M data, 29M linkedit.
+MemRegions: 141240 total, 6179M resident, 250M private, 842M shared.
+PhysMem: 12G used (2505M wired, 1726M compressor), 3448M unused.
+VM: 282T vsize, 6144M framework vsize, 15154839(0) swapins, 17807215(0) swapouts.
+Networks: packets: 50317016/55G in, 41029342/37G out.
+Disks: 82470238/2880G read, 37468179/785G written.
 
-PID    %CPU MEM   CMPRS FAULTS PAGEINS CSW  #TH STATE  
-88152  0.0  1505K 0B    67740  66434   1389 1/1 running
-Processes: 709 total, 6 running, 5 stuck, 698 sleeping, 3015 threads 
-2026/10/28 09:54:11
-Load Avg: 2.01, 1.73, 1.74 
-CPU usage: 23.87% user, 9.68% sys, 66.44% idle 
-SharedLibs: 139M resident, 16M data, 30M linkedit.
-MemRegions: 0 total, 0B resident, 350M private, 870M shared.
-PhysMem: 15G used (2912M wired, 1905M compressor), 472M unused.
-VM: 289T vsize, 6144M framework vsize, 15154839(0) swapins, 17807215(0) swapouts.
-Networks: packets: 50301943/55G in, 41015324/37G out.
-Disks: 81890405/2850G read, 37441363/786G written.
-
-PID    %CPU MEM    CMPRS FAULTS PAGEINS CSW   #TH STATE  
-88152  83.9 1729K+ 0B    84917+ 83344+  2900+ 1/1 running
-Processes: 709 total, 4 running, 705 sleeping, 3023 threads 
-2026/10/28 09:54:12
-Load Avg: 2.01, 1.73, 1.74 
-CPU usage: 28.55% user, 8.57% sys, 62.86% idle 
-SharedLibs: 139M resident, 16M data, 30M linkedit.
-MemRegions: 0 total, 0B resident, 350M private, 870M shared.
-PhysMem: 15G used (2892M wired, 1915M compressor), 527M unused.
-VM: 289T vsize, 6144M framework vsize, 15154839(0) swapins, 17807215(0) swapouts.
-Networks: packets: 50301946/55G in, 41015326/37G out.
-Disks: 81893236/2850G read, 37441395/786G written.
+PID    %CPU MEM   CMPRS FAULTS PAGEINS CSW #TH STATE  
+89006  0.0  1345K 0B    33098  32328   541 1/1 running
+Processes: 696 total, 5 running, 691 sleeping, 2951 threads 
+2026/10/28 10:07:33
+Load Avg: 1.53, 1.64, 1.69 
+CPU usage: 13.84% user, 7.40% sys, 78.75% idle 
+SharedLibs: 120M resident, 15M data, 29M linkedit.
+MemRegions: 217 total, 6672K resident, 250M private, 848M shared.
+PhysMem: 13G used (2403M wired, 1726M compressor), 2846M unused.
+VM: 284T vsize, 6144M framework vsize, 15154839(0) swapins, 17807215(0) swapouts.
+Networks: packets: 50317020/55G in, 41029345/37G out.
+Disks: 82473945/2880G read, 37468183/785G written.
 
 PID    %CPU MEM    CMPRS FAULTS PAGEINS CSW   #TH STATE  
-88152  97.9 1729K  0B    85389+ 83816+  3658+ 1/1 running
-Processes: 708 total, 3 running, 705 sleeping, 3010 threads 
-2026/10/28 09:54:13
-Load Avg: 2.01, 1.73, 1.74 
-CPU usage: 28.19% user, 4.26% sys, 67.53% idle 
-SharedLibs: 139M resident, 16M data, 30M linkedit.
-MemRegions: 30 total, 432K resident, 350M private, 871M shared.
-PhysMem: 15G used (2837M wired, 1914M compressor), 519M unused.
-VM: 289T vsize, 6144M framework vsize, 15154839(0) swapins, 17807215(0) swapouts.
-Networks: packets: 50301956/55G in, 41015329/37G out.
-Disks: 81893394/2850G read, 37441401/786G written.
+89006  87.8 1601K+ 0B    66355+ 65073+  1067+ 1/1 running
+Processes: 699 total, 5 running, 694 sleeping, 2971 threads 
+2026/10/28 10:07:34
+Load Avg: 1.53, 1.64, 1.69 
+CPU usage: 18.34% user, 6.89% sys, 74.75% idle 
+SharedLibs: 120M resident, 15M data, 29M linkedit.
+MemRegions: 137 total, 4400K resident, 250M private, 848M shared.
+PhysMem: 13G used (2403M wired, 1725M compressor), 2385M unused.
+VM: 285T vsize, 6144M framework vsize, 15154839(0) swapins, 17807215(0) swapouts.
+Networks: packets: 50317027/55G in, 41029351/37G out.
+Disks: 82477964/2881G read, 37468452/785G written.
+
+PID    %CPU MEM    CMPRS FAULTS PAGEINS CSW   #TH STATE  
+89006  98.3 1761K+ 0B    85503+ 83929+  1373+ 1/1 running
+Processes: 698 total, 3 running, 695 sleeping, 2948 threads 
+2026/10/28 10:07:35
+Load Avg: 1.53, 1.64, 1.69 
+CPU usage: 26.80% user, 2.72% sys, 70.46% idle 
+SharedLibs: 120M resident, 15M data, 29M linkedit.
+MemRegions: 30 total, 432K resident, 250M private, 848M shared.
+PhysMem: 13G used (2611M wired, 1725M compressor), 2287M unused.
+VM: 285T vsize, 6144M framework vsize, 15154839(0) swapins, 17807215(0) swapouts.
+Networks: packets: 50317042/55G in, 41029365/37G out.
+Disks: 82479262/2881G read, 37468458/785G written.
 
 PID    %CPU MEM    CMPRS FAULTS PAGEINS CSW   #TH STATE  

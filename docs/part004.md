@@ -108,8 +108,8 @@ After:
 if libc::madvise(ptr, len, libc::MADV_WILLNEED) != 0 {
 ```
 
-Measurements after this change (raw output in
-[`measurements/part004/`](../measurements/part004/)):
+Measurements after this change (raw output from commit
+[`7f3994e`](https://github.com/davidhruby/brrr/tree/7f3994e/measurements/part004)):
 
 | | `david` 100M | `david` 1B |
 |---|---|---|
@@ -132,6 +132,105 @@ page at ~250 MB/s as in change #1. Most of the file is read **twice** (27.0 GB i
 
 On 100M (1.38 GB, fits in RAM), the instructions per row are the same and the wall time is
 a bit higher (2.8 s → 3.1 s) in a single run.
+
+### 3. `MADV_WILLNEED` in 512 MB chunks, `MADV_DONTNEED` behind
+
+So the advice has to be limited to what fits in RAM. The file is split into 512 MB chunks.
+At the start, the program advises the first chunk. Whenever it's halfway through a chunk, it
+advises the next one with `MADV_WILLNEED`, so the kernel has the rest of the current chunk
+(256 MB) as a head start. At the same moment it tells the kernel with `MADV_DONTNEED` that
+the chunk before the current one isn't needed any more. The slice the loop reads still covers
+the whole file; the chunks only decide when and where to give the advice, so a chunk boundary
+in the middle of a line doesn't matter. `madvise` needs a page-aligned address: the mapping
+starts on a page and the chunks are multiples of 16 KB, so every chunk start is aligned.
+
+Before (changes #1 and #2):
+
+```rust
+let file = File::open(input_file_path).unwrap();
+let map = mmap(&file);
+
+let mut stats: HashMap<Vec<u8>, MeasurementStats> = HashMap::new();
+for line in map.split(|c| *c == b'\n') {
+    if line.is_empty() {
+        break;
+    }
+    let mut fields = line.rsplitn(2, |c| *c == b';');
+```
+
+After (`mmap` now returns only the pointer, without `madvise`):
+
+```rust
+let file = File::open(input_file_path).unwrap();
+let file_len: usize = file.metadata().unwrap().len() as usize;
+let m_advise_size: usize = 512 * 1024 * 1024;
+let mut m_adivse_block_index = 0;
+let when_to_start_m_advise = m_advise_size / 2;
+let ptr = mmap(&file, file_len);
+
+if unsafe { libc::madvise(ptr, m_advise_size as libc::size_t, libc::MADV_WILLNEED) } != 0 {
+    panic!("madvise  failed: {:?}", std::io::Error::last_os_error());
+}
+let map = unsafe { std::slice::from_raw_parts(ptr as *const u8, file_len) };
+let map_start_byte = map.as_ptr() as usize;
+let mut next_m_advise_byte = map_start_byte + m_advise_size;
+let map_end_byte = map_start_byte + file_len;
+
+let mut stats: HashMap<Vec<u8>, MeasurementStats> = HashMap::new();
+for line in map.split(|c| *c == b'\n') {
+    if line.is_empty() {
+        break;
+    }
+
+    if (next_m_advise_byte - line.as_ptr() as usize) < when_to_start_m_advise {
+        if (next_m_advise_byte + m_advise_size) > map_end_byte {
+            if unsafe { libc::madvise(next_m_advise_byte as *mut c_void, (map_end_byte - next_m_advise_byte) as libc::size_t, libc::MADV_WILLNEED) } != 0 {
+                panic!("madvise MADV_WILLNEED failed: {:?}", std::io::Error::last_os_error());
+            }
+            next_m_advise_byte = usize::MAX;
+        } else {
+            if unsafe { libc::madvise(next_m_advise_byte as *mut c_void, m_advise_size as libc::size_t, libc::MADV_WILLNEED) } != 0 {
+                panic!("madvise MADV_WILLNEED failed: {:?}", std::io::Error::last_os_error());
+            }
+            next_m_advise_byte += m_advise_size;
+        };
+        if m_adivse_block_index > 0 {
+            if unsafe { libc::madvise((map_start_byte + ((m_adivse_block_index - 1) * m_advise_size)) as *mut c_void, m_advise_size as libc::size_t, libc::MADV_DONTNEED) } != 0 {
+                panic!("madvise MADV_DONTNEED failed: {:?}", std::io::Error::last_os_error());
+            }
+        }
+        m_adivse_block_index += 1;
+    }
+
+    let mut fields = line.rsplitn(2, |c| *c == b';');
+```
+
+Measurements after this change (raw output in
+[`measurements/part004/`](../measurements/part004/)):
+
+| | `david` 100M | `david` 1B |
+|---|---|---|
+| Wall time | 2.9 s | 37 s |
+| CPU time (user + sys) | 2.8 s | 28.1 s |
+| Peak memory footprint | 1.9 MB | 7.9 MB |
+| Swapped to the SSD | 0 | 0 |
+| Instructions per row | ~471 | ~479 |
+| Page faults | 84,214 | 842,022 |
+| Read from the SSD | | 13.6 GB |
+
+**1B: 47 s (change #1) → 37 s.** The file is read once again (13.6 GB), in big requests
+(~276 KB), and the waiting dropped from ~19 s to ~9 s. I also tried 128 MB and 256 MB chunks,
+and without `MADV_DONTNEED`: all of them came out at 38 – 39 s (raw output in the
+`measurements/part004-mmap-progressive-madvise*` folders), so the chunk size doesn't matter.
+
+But the SSD isn't the bottleneck any more. Per second, `iostat` shows bursts of ~510 MB/s
+and in between seconds where it reads almost nothing (2, 5, 31, 36 MB/s): the kernel reads a
+chunk faster than the program gets through it, and then waits for the next advice. Yet the
+program still waits ~9 s, and the number of page faults hasn't changed: one for every page,
+842,022. So the waiting isn't only for the SSD, but also on the page faults themselves.
+
+The 1M file (~14 MB) crashes with this version: the first `madvise` asks for 512 MB, more than
+the file, and `madvise` fails.
 
 ## What I learned
 

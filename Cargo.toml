@@ -15,6 +15,10 @@ path = "src/david/main.rs"
 name = "analyze-xctrace"
 path = "src/analyze/xctrace/main.rs"
 
+[[bin]]
+name = "analyze-tlb-size"
+path = "src/analyze/tlb_size/main.rs"
+
 [profile.release]
 lto = "fat"
 debug = "full"

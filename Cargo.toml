@@ -27,3 +27,5 @@ debug = "full"
 quick-xml = { version = "0.42.0", features = ["serialize", "overlapped-lists"] }
 serde = { version = "1.0.229", features = ["derive"] }
 rustc-demangle = "0.1.28"
+rand = { version = "0.10.3", features = ["thread_rng"]}
+libc = "0.2.191"

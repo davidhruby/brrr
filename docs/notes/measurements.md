@@ -20,12 +20,12 @@ cp input/1M_measurements.txt input/100M_measurements.txt /Volumes/RAMDisk/
 
 cargo build --release
 
-scripts/measure.sh david 1M part003
-scripts/measure.sh david 100M part003
+scripts/measure.sh david 1M part004
+scripts/measure.sh david 100M part004
 
 hdiutil detach /Volumes/RAMDisk
 
-scripts/measure.sh david 1B part003
+scripts/measure.sh david 1B part004
 ```
 
 > **Gotcha: the RAM disk isn't guaranteed to stay in RAM.** Its memory is ordinary memory, so

@@ -67,8 +67,8 @@ fn mmap(file: &File) -> &'static [u8] {
 }
 ```
 
-Measurements after this change (raw output in
-[`measurements/part004/`](../measurements/part004/)):
+Measurements after this change (raw output from commit
+[`400953f`](https://github.com/davidhruby/brrr/tree/400953f/measurements/part004)):
 
 | | `david` 100M | `david` 1B |
 |---|---|---|
@@ -90,6 +90,48 @@ big requests (~247 KB per request in `iostat`) while the program was working. Wi
 macOS reads only ~53 KB per request, one after another, so the SSD delivers only ~260 MB/s
 instead of the ~2.3 GB/s it can do. The CPU used to be the bottleneck and hid this; now the
 SSD is.
+
+### 2. `MADV_WILLNEED` on the whole file
+
+An attempt to make the kernel read ahead: instead of `MADV_SEQUENTIAL`, `madvise` gets
+`MADV_WILLNEED`, "I'll need this soon, start reading it now", for the whole mapped file.
+
+Before:
+
+```rust
+if libc::madvise(ptr, len, libc::MADV_SEQUENTIAL) != 0 {
+```
+
+After:
+
+```rust
+if libc::madvise(ptr, len, libc::MADV_WILLNEED) != 0 {
+```
+
+Measurements after this change (raw output in
+[`measurements/part004/`](../measurements/part004/)):
+
+| | `david` 100M | `david` 1B |
+|---|---|---|
+| Wall time | 3.1 s | 63 s |
+| CPU time (user + sys) | 2.9 s | 31.2 s |
+| Peak memory footprint | 1.8 MB | 7.9 MB |
+| Swapped to the SSD | 0 | 0 |
+| Instructions per row | ~466 | ~524 |
+| Page faults | 84,214 | 1,671,039 |
+| Read from the SSD | | 27.0 GB |
+
+**Slower on 1B: 47 s → 63 s.** macOS takes the advice, and too literally. In the first ~11 s
+it reads the file ahead in big requests (300 – 420 KB per request) at **~1.5 GB/s**, so the SSD
+can do it. But that's ~14 GB in 11 s, while the program gets through only ~5 GB of it. The
+free RAM runs out (529,035 free pages before the run, 4,985 after), and to make room the kernel
+drops pages the program hasn't reached yet. When it gets there, they're read again, page by
+page at ~250 MB/s as in change #1. Most of the file is read **twice** (27.0 GB instead of
+13.8 GB), there are twice as many page faults, and the kernel's extra work shows in `sys`
+(1.9 s → 4.6 s).
+
+On 100M (1.38 GB, fits in RAM), the instructions per row are the same and the wall time is
+a bit higher (2.8 s → 3.1 s) in a single run.
 
 ## What I learned
 

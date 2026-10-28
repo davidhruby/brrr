@@ -77,7 +77,7 @@ fn mmap(file: &File) -> &'static [u8] {
         if ptr == libc::MAP_FAILED {
             panic!("mmap failed: {:?}", std::io::Error::last_os_error());
         } else {
-            if libc::madvise(ptr, len, libc::MADV_SEQUENTIAL) != 0 {
+            if libc::madvise(ptr, len, libc::MADV_WILLNEED) != 0 {
                 panic!("madvise  failed: {:?}", std::io::Error::last_os_error());
             } else {
                 std::slice::from_raw_parts(ptr as *const u8, len)

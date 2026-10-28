@@ -334,7 +334,95 @@ in Instruments yet.
 On the 1M file, the helper thread panics on the first `madvise` (512 MB, more than the file),
 but the main thread doesn't depend on it and the output is still correct.
 
+### 5. Refactoring: raw pointers, helper structs and unit tests
+
+No new idea, only cleaner code for change #4, so that its logic can be tested:
+
+- The message is a struct `MMemMessage` instead of a `(usize, usize, usize)` tuple, and the
+  address in it is a raw pointer `*const u8` instead of a `usize`. Raw pointers aren't `Send`,
+  so the struct gets an `unsafe impl Send`, with a comment why it's safe.
+- `MMapHelper` keeps all the `libc` calls (`mmap`, `madvise`) in one place.
+- `NextBlockPreLoadInfo` decides when to send the next chunk. The end of the file is `None`
+  in an `Option<*const u8>` instead of `usize::MAX`.
+- The address arithmetic uses pointer methods: `add`, `sub` and `offset_from_unsigned` (the
+  distance between two pointers).
+
+For example (excerpts):
+
+```rust
+struct MMemMessage {
+    ptr: *const u8,
+    len: usize,
+    do_not_need_previous_block: bool,
+}
+
+// SAFETY: ptr points into the mmap region, which lives for the whole run of the program,
+// and the helper thread only reads from it.
+unsafe impl Send for MMemMessage {}
+```
+
+```rust
+let mut next_block_pre_load_info = NextBlockPreLoadInfo::new(map.as_ptr(), file_len, M_ADVISE_SIZE);
+next_block_pre_load_info.request_first_block_load(&tx);
+
+for line in map.split(|c| *c == b'\n') {
+    // ...
+    next_block_pre_load_info.request_next_block_load(&tx, line.as_ptr());
+```
+
+The tests are in `#[cfg(test)]` modules next to the structs they test (`cargo test`). The
+`Sender` doesn't need a mock: a test creates a real channel, and whatever the code sent stays
+in it, so `rx.try_iter()` gives all the messages, like an argument captor in Java:
+
+```rust
+let (tx, rx) = mpsc::channel::<MMemMessage>();
+next_block_pre_load_info.request_next_block_load(&tx, line_ptr);
+
+let received_messages = rx.try_iter().collect::<Vec<MMemMessage>>();
+assert_eq!(received_messages.len(), 1);
+```
+
+Where the code only moves a pointer, a test can use a made-up address in hex, created with
+`std::ptr::without_provenance`, and check the result by hand (2 × 512 MB = `0x4000_0000`):
+
+```rust
+let m_mem_message = MMemMessage {
+    ptr: std::ptr::without_provenance(0x5000_0000),
+    len: 10,
+    do_not_need_previous_block: false,
+};
+assert_eq!(m_mem_message.do_not_need_block_ptr(), std::ptr::without_provenance(0x1000_0000));
+```
+
+Where it measures the distance between two pointers, both have to point into the same
+allocation, so those tests use a real `Vec` and pointers into it. With two unrelated pointers
+the debug build stopped the test: `ptr::offset_from_unsigned requires self >= origin`.
+
+Measured on 1B: **28.5 s**, the same as change #4. The refactoring costs nothing.
+
 ## What I learned
+
+### 1. Using `mmap` (on macOS)
+
+- **What it gives.** `mmap` maps the file into the address space, and the program reads the
+  bytes straight from the file cache: no `read` calls, no copy into a buffer. A `&[u8]` over
+  the mapping can be split into lines that point right into it.
+- **What it costs.** Nothing is read when the file is mapped. The first access to every page
+  (16 KB on Apple Silicon) is a page fault, and the thread waits in the kernel until the page
+  is there: 842,009 faults for the 13.8 GB file. Without help, macOS reads the file in small
+  requests (~53 KB), so a single thread spends a big part of the run waiting (~19 s of 47 s in
+  change #1).
+- **`madvise` is only advice, and it can hurt.** `MADV_SEQUENTIAL` didn't make the reads
+  bigger. `MADV_WILLNEED` on the whole 13.8 GB file read faster than the program could use
+  it, ran out of RAM, and the kernel dropped pages it then had to read again (27 GB read, 47 s →
+  63 s). The advice has to cover only what fits in RAM: chunks of 512 MB ahead, and
+  `MADV_DONTNEED` on what's behind.
+- **The address passed to `madvise` must be page-aligned**, the length doesn't have to be.
+  The mapping starts on a page, so chunk starts that are multiples of 16 KB are always aligned.
+- **The page faults can be moved to another thread.** Threads of one process share the page
+  tables. A helper thread that reads one byte of every page ahead (`read_volatile`, so the
+  compiler doesn't drop the read) takes the faults and the waiting, and when the main thread
+  gets there, the page is already mapped (37 s → 28 s).
 
 ## Next steps
 
@@ -343,12 +431,6 @@ but the main thread doesn't depend on it and the output is still correct.
 Things I want to try later. I'm not doing them yet, because Jon may get to them in a later
 part of the stream, and I don't want to get ahead of him.
 
-- **Read ahead of the program on 1B.** Tell the kernel early which part of the file comes
-  next, so it reads from the SSD while the program is working: `madvise` with
-  `MADV_WILLNEED` (on the whole file, or on a window ahead of the current position), or the
-  macOS-specific `fcntl` with `F_RDADVISE`. Or a second thread that touches one byte of every
-  page ahead of the main thread, so the page faults and the waiting happen there. If it works,
-  the page faults in `time.txt` turn into page reclaims (the page is already in RAM).
 - **Check the waiting in Instruments.** The `thread-state` table of a System Trace shows how
   long the thread was running and how long it was blocked, which would confirm the 19 s
   directly instead of from `real` − `user` − `sys`.

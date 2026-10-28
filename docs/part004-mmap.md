@@ -205,8 +205,8 @@ for line in map.split(|c| *c == b'\n') {
     let mut fields = line.rsplitn(2, |c| *c == b';');
 ```
 
-Measurements after this change (raw output in
-[`measurements/part004/`](../measurements/part004/)):
+Measurements after this change (raw output from commit
+[`7369f31`](https://github.com/davidhruby/brrr/tree/7369f31/measurements/part004)):
 
 | | `david` 100M | `david` 1B |
 |---|---|---|
@@ -231,6 +231,108 @@ program still waits ~9 s, and the number of page faults hasn't changed: one for 
 
 The 1M file (~14 MB) crashes with this version: the first `madvise` asks for 512 MB, more than
 the file, and `madvise` fails.
+
+### 4. A helper thread that touches the pages ahead
+
+If the waiting is on the page faults, someone else should take them. A second thread gets the
+chunks over a channel instead of the main thread advising them itself. For each chunk it calls
+`MADV_WILLNEED` on it and `MADV_DONTNEED` on the chunk two before it (the one behind the
+main thread), and then reads one byte
+of every 16 KB page in it with `read_volatile` (a volatile read the compiler can't drop, even
+though the value isn't used). The page faults, and the waiting with them, now happen in the
+helper thread. Threads of one process share the page tables, so when the main thread gets to
+a page, it's already mapped and there's no fault left for it.
+
+Before (change #3, advising in the main thread):
+
+```rust
+if (next_m_advise_byte - line.as_ptr() as usize) < when_to_start_m_advise {
+    if (next_m_advise_byte + m_advise_size) > map_end_byte {
+        if unsafe { libc::madvise(next_m_advise_byte as *mut c_void, (map_end_byte - next_m_advise_byte) as libc::size_t, libc::MADV_WILLNEED) } != 0 {
+            panic!("madvise MADV_WILLNEED failed: {:?}", std::io::Error::last_os_error());
+        }
+        next_m_advise_byte = usize::MAX;
+    } else {
+        if unsafe { libc::madvise(next_m_advise_byte as *mut c_void, m_advise_size as libc::size_t, libc::MADV_WILLNEED) } != 0 {
+            panic!("madvise MADV_WILLNEED failed: {:?}", std::io::Error::last_os_error());
+        }
+        next_m_advise_byte += m_advise_size;
+    };
+    if m_adivse_block_index > 0 {
+        if unsafe { libc::madvise((map_start_byte + ((m_adivse_block_index - 1) * m_advise_size)) as *mut c_void, m_advise_size as libc::size_t, libc::MADV_DONTNEED) } != 0 {
+            panic!("madvise MADV_DONTNEED failed: {:?}", std::io::Error::last_os_error());
+        }
+    }
+    m_adivse_block_index += 1;
+}
+```
+
+After (the helper thread, started at the beginning of `main`):
+
+```rust
+const M_ADVISE_SIZE: usize = 512 * 1024 * 1024;
+
+let (tx, rx) = mpsc::channel::<(usize, usize, usize)>();
+
+thread::spawn(move || {
+    for (ptr, len, m_adivse_block_index) in rx {
+        if unsafe { libc::madvise(ptr as *mut c_void, len as libc::size_t, libc::MADV_WILLNEED) } != 0 {
+            panic!("madvise MADV_WILLNEED failed: {:?}", std::io::Error::last_os_error());
+        }
+        if m_adivse_block_index > 0 {
+            if unsafe { libc::madvise((ptr - M_ADVISE_SIZE - M_ADVISE_SIZE) as *mut c_void, M_ADVISE_SIZE as libc::size_t, libc::MADV_DONTNEED) } != 0 {
+                panic!("madvise MADV_DONTNEED failed: {:?}", std::io::Error::last_os_error());
+            }
+        }
+        let page_count = len / (16 * 1024);
+        for page_index in 0..page_count {
+            let byte_position = ptr + (page_index * 16 * 1024);
+            let y = byte_position as *const u8;
+            unsafe { std::ptr::read_volatile(y) };
+        }
+    }
+});
+```
+
+and in the loop, the main thread only sends the next chunk:
+
+```rust
+if (next_m_advise_byte - line.as_ptr() as usize) < when_to_start_m_advise {
+    let m_adivse_block_index = (next_m_advise_byte - (map_start_byte + M_ADVISE_SIZE)) / M_ADVISE_SIZE;
+    if (next_m_advise_byte + M_ADVISE_SIZE) > map_end_byte {
+        tx.send((next_m_advise_byte, (map_end_byte - next_m_advise_byte), m_adivse_block_index)).unwrap();
+        next_m_advise_byte = usize::MAX;
+    } else {
+        tx.send((next_m_advise_byte, M_ADVISE_SIZE, m_adivse_block_index)).unwrap();
+        next_m_advise_byte += M_ADVISE_SIZE;
+    };
+}
+```
+
+Measurements after this change (raw output in
+[`measurements/part004/`](../measurements/part004/)):
+
+| | `david` 100M | `david` 1B |
+|---|---|---|
+| Wall time | 2.8 s | 28 s |
+| CPU time (user + sys, both threads) | 2.8 s | 29.4 s |
+| Peak memory footprint | 1.9 MB | 7.9 MB |
+| Swapped to the SSD | 0 | 0 |
+| Instructions per row | ~477 | ~486 |
+| Page faults | 84,217 | 842,026 |
+| Read from the SSD | | 13.8 GB |
+
+**1B: 37 s → 28 s**, and from Part 003 (48.9 s) it's **−43 %**. The wall time is now about the
+CPU time: the main thread doesn't wait any more and the program is limited by computing again.
+The number of page faults is the same, they just happen in the helper thread. The SSD reads
+evenly at ~510 MB/s, as fast as the main thread gets through the data (13.8 GB / 28 s), and
+the idle seconds from change #3 are gone. So the ~9 s of waiting in change #3 were the page
+faults themselves, not the SSD. Most likely, on macOS a thread that hits a page fault on a
+mapped file waits in the kernel even when the page is already in RAM; I haven't checked that
+in Instruments yet.
+
+On the 1M file, the helper thread panics on the first `madvise` (512 MB, more than the file),
+but the main thread doesn't depend on it and the output is still correct.
 
 ## What I learned
 

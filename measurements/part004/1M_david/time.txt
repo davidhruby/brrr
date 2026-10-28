@@ -1,14 +1,14 @@
 
-thread 'main' (10232914) panicked at src/david/main.rs:46:9:
-madvise  failed: Os { code: 22, kind: InvalidInput, message: "Invalid argument" }
+thread '<unnamed>' (10243504) panicked at src/david/main.rs:46:17:
+madvise MADV_WILLNEED failed: Os { code: 22, kind: InvalidInput, message: "Invalid argument" }
 note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
-        0.50 real         0.00 user         0.00 sys
-            15171584  maximum resident set size
+        0.55 real         0.03 user         0.00 sys
+            15630336  maximum resident set size
                    0  average shared memory size
                    0  average unshared data size
                    0  average unshared stack size
-                 281  page reclaims
-                 831  page faults
+                 298  page reclaims
+                 845  page faults
                    0  swaps
                    0  block input operations
                    0  block output operations
@@ -16,7 +16,7 @@ note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
                    0  messages received
                    0  signals received
                    0  voluntary context switches
-                  23  involuntary context switches
-            22022595  instructions retired
-            12062406  cycles elapsed
-             1032504  peak memory footprint
+                  40  involuntary context switches
+           504267874  instructions retired
+           125070812  cycles elapsed
+             1179984  peak memory footprint

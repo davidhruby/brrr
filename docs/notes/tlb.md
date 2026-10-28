@@ -2,7 +2,7 @@
 
 *Notes mostly for myself. Apple doesn't publish the TLB sizes of the M4 and `sysctl` doesn't
 show them, so I measured them. The measurements on this page were made during
-[Part 004](../part004.md), on the machine described in [My machine](my-machine.md).*
+[Part 004](../part004-mmap.md), on the machine described in [My machine](my-machine.md).*
 
 ## What the TLB is
 

@@ -1,25 +1,25 @@
-Processes: 702 total, 3 running, 1 stuck, 698 sleeping, 2921 threads 
-2026/10/28 10:06:00
-Load Avg: 1.45, 1.64, 1.70 
-CPU usage: 3.73% user, 14.92% sys, 81.34% idle 
-SharedLibs: 152M resident, 16M data, 30M linkedit.
-MemRegions: 141459 total, 5653M resident, 255M private, 839M shared.
-PhysMem: 12G used (2636M wired, 1733M compressor), 3904M unused.
-VM: 286T vsize, 6144M framework vsize, 15154839(0) swapins, 17807215(0) swapouts.
-Networks: packets: 50316373/55G in, 41028830/37G out.
-Disks: 82442635/2878G read, 37466020/785G written.
+Processes: 707 total, 3 running, 2 stuck, 702 sleeping, 2977 threads 
+2026/10/28 10:16:07
+Load Avg: 1.75, 1.65, 1.69 
+CPU usage: 3.10% user, 13.95% sys, 82.94% idle 
+SharedLibs: 154M resident, 17M data, 31M linkedit.
+MemRegions: 142917 total, 5989M resident, 301M private, 848M shared.
+PhysMem: 12G used (2404M wired, 1612M compressor), 3462M unused.
+VM: 288T vsize, 6144M framework vsize, 15154839(0) swapins, 17807215(0) swapouts.
+Networks: packets: 50335278/55G in, 41047334/37G out.
+Disks: 82664951/2898G read, 37487667/786G written.
 
 PID    %CPU MEM CMPRS FAULTS PAGEINS CSW #TH STATE   
-88931  0.0  80K 0B    76     1       7   1   sleeping
-Processes: 701 total, 3 running, 1 stuck, 697 sleeping, 2904 threads 
-2026/10/28 10:06:01
-Load Avg: 1.45, 1.64, 1.70 
-CPU usage: 4.27% user, 6.68% sys, 89.4% idle 
-SharedLibs: 152M resident, 16M data, 30M linkedit.
-MemRegions: 86 total, 1136K resident, 255M private, 839M shared.
-PhysMem: 12G used (2658M wired, 1733M compressor), 3871M unused.
+89669  0.0  80K 0B    76     1       6   1   sleeping
+Processes: 702 total, 4 running, 698 sleeping, 2941 threads 
+2026/10/28 10:16:08
+Load Avg: 1.75, 1.65, 1.69 
+CPU usage: 15.59% user, 6.2% sys, 78.37% idle 
+SharedLibs: 154M resident, 17M data, 31M linkedit.
+MemRegions: 30 total, 432K resident, 301M private, 848M shared.
+PhysMem: 12G used (2791M wired, 1611M compressor), 3398M unused.
 VM: 286T vsize, 6144M framework vsize, 15154839(0) swapins, 17807215(0) swapouts.
-Networks: packets: 50316399/55G in, 41028853/37G out.
-Disks: 82444973/2879G read, 37466026/785G written.
+Networks: packets: 50335318/55G in, 41047361/37G out.
+Disks: 82666127/2898G read, 37487676/786G written.
 
 PID    %CPU MEM CMPRS FAULTS PAGEINS CSW #TH STATE   

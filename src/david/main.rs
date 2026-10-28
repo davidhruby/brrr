@@ -1,3 +1,4 @@
+// this challenge has a rule that all code has to be in one file
 use std::{env, str, thread};
 use std::collections::{BTreeMap, HashMap};
 use std::ffi::c_void;
@@ -9,7 +10,6 @@ use std::sync::mpsc::Sender;
 const KB: usize = 1024;
 const MB: usize = 1024 * KB;
 const M_ADVISE_SIZE: usize = 512 * MB;
-const M_ADVISE_START_THRESHOLD: usize = M_ADVISE_SIZE / 2;
 const MACOS_PAGE_SIZE: usize = 16 * KB;
 
 struct MeasurementStats {
@@ -55,6 +55,21 @@ impl MMemMessage {
     // => m_m_message.ptr - 2 * M_ADVISE_SIZE is previous block
     fn do_not_need_block_ptr(&self) -> *const u8 {
         unsafe { self.ptr.sub( 2 * M_ADVISE_SIZE) }
+    }
+}
+
+#[cfg(test)]
+mod m_mem_message_tests {
+    use super::*;
+    #[test]
+    fn test_do_not_need_block_ptr() {
+        let m_mem_message = MMemMessage {
+            ptr: std::ptr::without_provenance(0x5000_0000),
+            len: 10,
+            do_not_need_previous_block: false,
+        };
+        // 2 * 512 MB = 0x4000_0000
+        assert_eq!(m_mem_message.do_not_need_block_ptr(), std::ptr::without_provenance(0x1000_0000));
     }
 }
 
@@ -117,37 +132,41 @@ impl MMapHelper {
 struct NextBlockPreLoadInfo {
     next_m_advise_ptr_opt: Option<*const u8>,
     map_end_ptr: *const u8,
-    do_not_need_previous_block: bool
+    m_advise_size: usize,
+    m_advise_size_threshold: usize,
+    do_not_need_previous_block: bool,
 }
 
 impl NextBlockPreLoadInfo {
-    fn new(map_start_ptr: *const u8, file_len: usize) -> Self {
+    fn new(map_start_ptr: *const u8, file_len: usize, m_advise_size: usize) -> Self {
         Self {
             next_m_advise_ptr_opt: Some(map_start_ptr),
             map_end_ptr: unsafe { map_start_ptr.add(file_len) },
-            do_not_need_previous_block: false
+            m_advise_size,
+            m_advise_size_threshold: m_advise_size / 2,
+            do_not_need_previous_block: false,
         }
     }
 
     fn request_first_block_load(&mut self, tx: &Sender<MMemMessage>) {
         if let Some(next_m_advise_ptr) = self.next_m_advise_ptr_opt {
-            tx.send(MMemMessage { ptr: next_m_advise_ptr, len: M_ADVISE_SIZE, do_not_need_previous_block: self.do_not_need_previous_block }).unwrap();
-            self.next_m_advise_ptr_opt = unsafe { Some(next_m_advise_ptr.add(M_ADVISE_SIZE)) };
+            tx.send(MMemMessage { ptr: next_m_advise_ptr, len: self.m_advise_size, do_not_need_previous_block: self.do_not_need_previous_block }).unwrap();
+            self.next_m_advise_ptr_opt = unsafe { Some(next_m_advise_ptr.add(self.m_advise_size)) };
         }
     }
 
     fn request_next_block_load(&mut self, tx: &Sender<MMemMessage>, line_ptr: *const u8) {
         if let Some(next_m_advise_ptr) = self.next_m_advise_ptr_opt {
-            if unsafe { next_m_advise_ptr.offset_from_unsigned(line_ptr) } < M_ADVISE_START_THRESHOLD {
+            if unsafe { next_m_advise_ptr.offset_from_unsigned(line_ptr) } < self.m_advise_size_threshold {
                 let remaining_bytes_len = unsafe { self.map_end_ptr.offset_from_unsigned(next_m_advise_ptr) };
 
                 // are fewer bytes left than a full block?
-                if remaining_bytes_len <= M_ADVISE_SIZE {
+                if remaining_bytes_len <= self.m_advise_size {
                     tx.send(MMemMessage { ptr: next_m_advise_ptr, len: remaining_bytes_len, do_not_need_previous_block: self.do_not_need_previous_block }).unwrap();
                     self.next_m_advise_ptr_opt = None;
                 } else {
-                    tx.send(MMemMessage { ptr: next_m_advise_ptr, len: M_ADVISE_SIZE, do_not_need_previous_block: self.do_not_need_previous_block }).unwrap();
-                    self.next_m_advise_ptr_opt = unsafe { Some(next_m_advise_ptr.add(M_ADVISE_SIZE)) };
+                    tx.send(MMemMessage { ptr: next_m_advise_ptr, len: self.m_advise_size, do_not_need_previous_block: self.do_not_need_previous_block }).unwrap();
+                    self.next_m_advise_ptr_opt = unsafe { Some(next_m_advise_ptr.add(self.m_advise_size)) };
                 }
                 // this way madvise MADV_DONTNEED will be true from 3rd MMemMessage
                 // if this block is executed during first block processing we don't have previous block to mark as MADV_DONTNEED
@@ -155,6 +174,155 @@ impl NextBlockPreLoadInfo {
                 self.do_not_need_previous_block = true;
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod next_block_pre_load_tests {
+    use super::*;
+    #[test]
+    fn test_new() {
+        let next_block_pre_load_info = NextBlockPreLoadInfo::new(
+            std::ptr::without_provenance(0x5000_0000),
+            0x1000,
+            M_ADVISE_SIZE
+        );
+        assert_eq!(next_block_pre_load_info.next_m_advise_ptr_opt, Some(std::ptr::without_provenance(0x5000_0000)));
+        assert_eq!(next_block_pre_load_info.map_end_ptr, std::ptr::without_provenance(0x5000_1000));
+        assert_eq!(next_block_pre_load_info.do_not_need_previous_block, false);
+    }
+
+    #[test]
+    fn test_request_first_block_load_with_remaining_bytes_lower_than_m_advise_size() {
+        let mut next_block_pre_load_info = NextBlockPreLoadInfo::new(
+            std::ptr::without_provenance(0x5000_0000),
+            0x1000,
+            M_ADVISE_SIZE
+        );
+
+        let (tx, rx) = mpsc::channel::<MMemMessage>();
+        next_block_pre_load_info.request_first_block_load(&tx);
+
+        let received_messages = rx.try_iter().collect::<Vec<MMemMessage>>();
+        assert_eq!(received_messages.len(), 1);
+
+        let received_m_mem_message = received_messages.get(0).unwrap();
+        assert_eq!(received_m_mem_message.ptr, std::ptr::without_provenance(0x5000_0000));
+        // M_ADVISE_SIZE = 512 MB = 2²⁹ = 0x2000_0000
+        assert_eq!(received_m_mem_message.len, 0x2000_0000);
+        assert_eq!(received_m_mem_message.do_not_need_previous_block, false);
+
+        // M_ADVISE_SIZE = 512 MB = 2²⁹ = 0x2000_0000
+        // 0x5000_0000 + 0x2000_0000 = 0x7000_0000
+        assert_eq!(next_block_pre_load_info.next_m_advise_ptr_opt, Some(std::ptr::without_provenance(0x7000_0000)));
+        assert_eq!(next_block_pre_load_info.map_end_ptr, std::ptr::without_provenance(0x5000_1000));
+        assert_eq!(next_block_pre_load_info.do_not_need_previous_block, false);
+    }
+
+    #[test]
+    fn test_request_first_block_load_with_none_pointer() {
+        let mut next_block_pre_load_info = NextBlockPreLoadInfo {
+            next_m_advise_ptr_opt: None,
+            map_end_ptr: std::ptr::without_provenance(0x1000),
+            m_advise_size: 1024,
+            m_advise_size_threshold: 512,
+            do_not_need_previous_block: false,
+        };
+
+        let (tx, rx) = mpsc::channel::<MMemMessage>();
+        next_block_pre_load_info.request_first_block_load(&tx);
+
+        let received_messages = rx.try_iter().collect::<Vec<MMemMessage>>();
+        assert_eq!(received_messages.is_empty(), true);
+
+        assert_eq!(next_block_pre_load_info.next_m_advise_ptr_opt, None);
+        assert_eq!(next_block_pre_load_info.map_end_ptr, std::ptr::without_provenance(0x1000));
+        assert_eq!(next_block_pre_load_info.do_not_need_previous_block, false);
+    }
+
+    #[test]
+    fn test_request_next_block_load_with_remaining_bytes_bigger_than_m_advise_size() {
+        let data = vec![0u8; 2048];
+
+        let mut next_block_pre_load_info = NextBlockPreLoadInfo {
+            next_m_advise_ptr_opt: Some(unsafe { data.as_ptr().offset(512) }),
+            map_end_ptr: unsafe { data.as_ptr().offset(data.len() as isize) },
+            m_advise_size: 1024,
+            m_advise_size_threshold: 512,
+            do_not_need_previous_block: false,
+        };
+
+        let (tx, rx) = mpsc::channel::<MMemMessage>();
+        let line_ptr = unsafe { data.as_ptr().offset(10) };
+        next_block_pre_load_info.request_next_block_load(&tx, line_ptr);
+
+        let received_messages = rx.try_iter().collect::<Vec<MMemMessage>>();
+        assert_eq!(received_messages.len(), 1);
+
+        let received_m_mem_message = received_messages.get(0).unwrap();
+        assert_eq!(received_m_mem_message.ptr, unsafe { data.as_ptr().offset(512) });
+        assert_eq!(received_m_mem_message.len, 1024);
+        assert_eq!(received_m_mem_message.do_not_need_previous_block, false);
+
+        assert_eq!(next_block_pre_load_info.next_m_advise_ptr_opt, Some(unsafe { data.as_ptr().offset(512 + 1024) }));
+        assert_eq!(next_block_pre_load_info.map_end_ptr, unsafe { data.as_ptr().offset(data.len() as isize) });
+        assert_eq!(next_block_pre_load_info.m_advise_size, 1024);
+        assert_eq!(next_block_pre_load_info.m_advise_size_threshold, 512);
+        assert_eq!(next_block_pre_load_info.do_not_need_previous_block, true);
+    }
+
+    #[test]
+    fn test_request_next_block_load_with_remaining_bytes_lower_than_m_advise_size() {
+        let data = vec![0u8; 2048];
+
+        let mut next_block_pre_load_info = NextBlockPreLoadInfo {
+            next_m_advise_ptr_opt: Some(unsafe { data.as_ptr().offset(1_540) }),
+            map_end_ptr: unsafe { data.as_ptr().offset(data.len() as isize) },
+            m_advise_size: 1024,
+            m_advise_size_threshold: 512,
+            do_not_need_previous_block: false,
+        };
+
+        let (tx, rx) = mpsc::channel::<MMemMessage>();
+        let line_ptr = unsafe { data.as_ptr().offset(1_300) };
+        next_block_pre_load_info.request_next_block_load(&tx, line_ptr);
+
+        let received_messages = rx.try_iter().collect::<Vec<MMemMessage>>();
+        assert_eq!(received_messages.len(), 1);
+
+        let received_m_mem_message = received_messages.get(0).unwrap();
+        assert_eq!(received_m_mem_message.ptr, unsafe { data.as_ptr().offset(1_540) });
+        assert_eq!(received_m_mem_message.len, 2048 - 1_540);
+        assert_eq!(received_m_mem_message.do_not_need_previous_block, false);
+
+        assert_eq!(next_block_pre_load_info.next_m_advise_ptr_opt, None);
+        assert_eq!(next_block_pre_load_info.map_end_ptr, unsafe { data.as_ptr().offset(data.len() as isize) });
+        assert_eq!(next_block_pre_load_info.m_advise_size, 1024);
+        assert_eq!(next_block_pre_load_info.m_advise_size_threshold, 512);
+        assert_eq!(next_block_pre_load_info.do_not_need_previous_block, true);
+    }
+
+    #[test]
+    fn test_request_next_block_load_with_none_pointer() {
+        let mut next_block_pre_load_info = NextBlockPreLoadInfo {
+            next_m_advise_ptr_opt: None,
+            map_end_ptr: std::ptr::without_provenance(0x1000),
+            do_not_need_previous_block: false,
+            m_advise_size: 1024,
+            m_advise_size_threshold: 512
+        };
+
+        let (tx, rx) = mpsc::channel::<MMemMessage>();
+        next_block_pre_load_info.request_next_block_load(&tx, std::ptr::without_provenance(0x10));
+
+        let received_messages = rx.try_iter().collect::<Vec<MMemMessage>>();
+        assert_eq!(received_messages.is_empty(), true);
+
+        assert_eq!(next_block_pre_load_info.next_m_advise_ptr_opt, None);
+        assert_eq!(next_block_pre_load_info.map_end_ptr, std::ptr::without_provenance(0x1000));
+        assert_eq!(next_block_pre_load_info.m_advise_size, 1024);
+        assert_eq!(next_block_pre_load_info.m_advise_size_threshold, 512);
+        assert_eq!(next_block_pre_load_info.do_not_need_previous_block, false);
     }
 }
 
@@ -176,7 +344,7 @@ fn main() {
     let m_m_helper = MMapHelper::new(&file, file_len);
     let map = m_m_helper.as_slice();
 
-    let mut next_block_pre_load_info = NextBlockPreLoadInfo::new(map.as_ptr(), file_len);
+    let mut next_block_pre_load_info = NextBlockPreLoadInfo::new(map.as_ptr(), file_len, M_ADVISE_SIZE);
     next_block_pre_load_info.request_first_block_load(&tx);
 
     let mut stats: HashMap<Vec<u8>, MeasurementStats> = HashMap::new();

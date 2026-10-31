@@ -133,6 +133,113 @@ cargo bench --bench parse_temperature -- --baseline before
 > `std::hint::black_box` and return or use the result (for example a sum), otherwise the
 > compiler may drop the work and the benchmark measures nothing.
 
+## Measuring on Linux with `perf` (AWS)
+
+macOS can't show where the branch mispredictions happen (see
+[Performance](performance.md#where-the-mispredictions-happen-not-with-instruments)), so for
+that I used `perf` on an AWS instance (2026-10-31, used in
+[Part 005, change #3](../part005-parsing-temperature.md#3-parsing-without-branches)). A
+virtual machine on the Mac, Docker included, doesn't work: it doesn't get the CPU counters.
+
+### The instance
+
+AWS Console → EC2 → Launch instance:
+
+- **AMI:** *Ubuntu Server 24.04 LTS*, architecture **64-bit (Arm)**. The list of instance
+  types only shows Graviton types (`…g`) when the AMI is the Arm one.
+- **Instance type:** **`c7g.large`** (Graviton3, 2 vCPU, 4 GB). Not `t4g` (Graviton2,
+  burstable: probably no CPU counters, and the CPU gets throttled when its credits run out).
+  Small sizes of the 6g/7g/8g generations get a basic set of counters, the biggest sizes
+  (`c7g.16xlarge`, `.metal`) all of them.
+- **Key pair:** a new RSA `.pem`, saved as `/Users/davidhruby/.ssh/brrr-perf.pem`.
+- **Network:** allow SSH from *My IP*. **Storage:** 30 GB gp3 (the 1B file is 13.8 GB).
+
+```sh
+chmod 400 /Users/davidhruby/.ssh/brrr-perf.pem
+ssh -i /Users/davidhruby/.ssh/brrr-perf.pem ubuntu@<PUBLIC_IP>
+```
+
+### Setup on the instance
+
+```sh
+sudo apt update
+sudo apt install -y build-essential git openjdk-21-jdk-headless linux-tools-common linux-tools-aws linux-tools-$(uname -r)
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
+source /home/ubuntu/.cargo/env
+
+git clone https://github.com/davidhruby/brrr /home/ubuntu/brrr
+cargo build --release --bin david --manifest-path /home/ubuntu/brrr/Cargo.toml
+```
+
+The input files are generated on the instance, the same way as on the Mac (see
+[Setup: generating the input file](setup-generating-the-input-file.md)). The rows are random,
+so the output differs from the Mac, but the format is the same:
+
+```sh
+git clone https://github.com/gunnarmorling/1brc.git /home/ubuntu/1brc
+cd /home/ubuntu/1brc
+./mvnw clean verify
+./create_measurements.sh 1000000000
+mv /home/ubuntu/1brc/measurements.txt /home/ubuntu/brrr/input/1B_measurements.txt
+```
+
+Check that the counters work. `<not supported>` means the instance doesn't have them;
+`<not counted>` only means the run was too short for `perf` to get to that event:
+
+```sh
+sudo perf stat -e cycles,instructions,branches,branch-misses true
+```
+
+### Measuring
+
+Totals, only two events at a time, so they don't have to share the counters and count the
+whole run:
+
+```sh
+sudo perf stat -e branches,branch-misses /home/ubuntu/brrr/target/release/david /home/ubuntu/brrr/input/1B_measurements.txt > /dev/null
+```
+
+Many counters at once, like `perf stat -d -d` (which fails on this instance, see the gotcha
+in [Performance](performance.md)). The numbers are estimates, each event counts only part of
+the run:
+
+```sh
+sudo perf stat --all-user -e task-clock,context-switches,cpu-migrations,page-faults,cycles,instructions,stalled-cycles-frontend,stalled-cycles-backend,branches,branch-misses,L1-dcache-loads,L1-dcache-load-misses,L1-icache-loads,L1-icache-load-misses,dTLB-loads,dTLB-load-misses,iTLB-loads,iTLB-load-misses /home/ubuntu/brrr/target/release/david /home/ubuntu/brrr/input/1B_measurements.txt > /dev/null
+```
+
+Where the mispredictions happen: a sample at every 100,000th mispredicted branch, only in my
+code (`:u`):
+
+```sh
+sudo perf record -e branch-misses:u -c 100000 -o /home/ubuntu/perf-branch-misses-1B.data /home/ubuntu/brrr/target/release/david /home/ubuntu/brrr/input/1B_measurements.txt > /dev/null
+
+# by source file, by source line, and the instructions
+sudo perf report -i /home/ubuntu/perf-branch-misses-1B.data --no-children --sort srcfile --full-source-path --stdio | head -30
+sudo perf report -i /home/ubuntu/perf-branch-misses-1B.data --no-children --sort srcline --stdio | head -40
+sudo perf annotate -i /home/ubuntu/perf-branch-misses-1B.data --stdio -l | less
+```
+
+The same with call stacks, to browse interactively like Jon (keys in
+[Performance](performance.md#browsing-a-perf-profile-with-call-stacks-linux)):
+
+```sh
+sudo perf record -e branch-misses:u -c 100000 --call-graph dwarf -o /home/ubuntu/perf-branch-misses-1B-g.data /home/ubuntu/brrr/target/release/david /home/ubuntu/brrr/input/1B_measurements.txt > /dev/null
+sudo perf report -i /home/ubuntu/perf-branch-misses-1B-g.data
+```
+
+For a profile by time instead of by mispredictions, leave out `-e … -c …` and add `-F 999`.
+
+> **Gotcha: the 1B file takes ~100 s on this instance**, while the program computes only
+> ~40 s of it. The default EBS gp3 disk reads ~125 MB/s, and 4 GB of RAM can't cache a 13.8 GB
+> file, so every run reads it from the disk again. The counters of my code aren't affected,
+> it only takes longer. For quick runs, use the 100M file: it fits in the RAM, so from the
+> second run on it's read from the cache.
+
+### When done
+
+EC2 → the instance → **Terminate**, not just Stop: a stopped instance doesn't pay for the
+CPU, but its EBS disk is still billed.
+
 ## Totals
 
 From `time.txt`:

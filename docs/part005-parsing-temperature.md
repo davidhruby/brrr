@@ -288,12 +288,11 @@ What it shows:
   the digits independently, so the CPU can work on them at the same time (instructions per
   cycle went up from 3.82 to 4.03). I haven't verified that.
 - **~1.3 mispredictions per row are still left**, outside the parser. At ~13 cycles each
-  that's ~17 cycles per row, ~18 % of the main thread's time. Likely candidates are the places
-  where a loop stops depending on the data: `split` looking for the `\n`, `rsplitn` looking
-  for the `;`, and comparing the station names in the `HashMap`.
+  that's ~17 cycles per row, ~18 % of the main thread's time. Where they come from is
+  measured below: mostly hashing the station name, then the search for the `;`.
 
-**Where are they? Not measurable with Instruments.** I tried to find out which functions the
-remaining mispredictions come from, and didn't succeed:
+**Where are they? Not with Instruments.** I first tried to find out with Instruments which
+functions the remaining mispredictions come from, and didn't succeed:
 
 - The counters in the trace above are split by function too, but that split is useless:
   Instruments adds the whole change of a counter since the previous sample (~1 ms, thousands
@@ -312,12 +311,148 @@ remaining mispredictions come from, and didn't succeed:
   ([sampling on PMI events stopped working](https://developer.apple.com/forums/thread/736381),
   since Xcode 14.3, also on an M2).
 
-The tool built for exactly this is `perf` on Linux (`perf record -e branch-misses`, then
-`perf report` and `perf annotate`). It needs Linux on real hardware, a virtual machine on the
-Mac doesn't get the CPU counters. It would be a different CPU with a different branch
-predictor, so the counts won't match the M4, but where the mispredictions happen depends
-mostly on the data (the length of a line, of a name, the sign), so it should show the same
-places.
+**With `perf` on Linux.** So I measured it with `perf` on an AWS instance: `c7g.large`
+(Graviton3, ARM like the M4), Ubuntu 24.04, the same code, and a 1B file generated there with
+the same generator (different random rows, same format). A virtual machine on the Mac
+(including Docker) wouldn't do, because it doesn't get the CPU counters.
+
+```sh
+sudo perf stat -e branches,branch-misses ./target/release/david input/1B_measurements.txt > /dev/null
+sudo perf record -e branch-misses:u -c 100000 -o perf-branch-misses-1B.data ./target/release/david input/1B_measurements.txt > /dev/null
+sudo perf report -i perf-branch-misses-1B.data --no-children --sort srcfile --full-source-path --stdio
+sudo perf annotate -i perf-branch-misses-1B.data --stdio -l
+```
+
+`perf stat` with only two events, so that they don't have to share the few counters of a
+small instance and both count the whole time. `perf record -c 100000` takes a sample at
+every 100,000th mispredicted branch (13,810 samples), `:u` only in my code, not in the
+kernel. No call stacks: almost everything is inlined into `main`, so the samples are matched
+to source lines through the debug info instead.
+
+The Graviton3 mispredicts about as often as the M4:
+
+| Per row, 1B | Graviton3 (`perf stat`, both threads) | M4 (Instruments, main thread) |
+|---|---|---|
+| Branches | 72.7 | 76.2 |
+| Mispredicted branches | 1.38 | 1.31 |
+| Mispredicted of all branches | 1.9 % | 1.7 % |
+
+Where the mispredictions happen, by source file:
+
+| Source file | Share | What it is |
+|---|---|---|
+| `core/src/hash/sip.rs` | **50.8 %** | SipHash, the default hasher of `HashMap` |
+| `core/src/ptr/mod.rs` | 4.6 % | reading the bytes of the key inside SipHash |
+| `core/src/hash/mod.rs`, `std/src/hash/random.rs` | 7.0 % | calling the hasher (`Hash` for `[u8]`, `RandomState`) |
+| **hashing the station name, together** | **~62 %** | ~0.86 mispredictions per row |
+| `hashbrown` (`raw.rs`, `map.rs`, …), `core/src/slice/cmp.rs` | ~6.7 % | looking the name up in the table and comparing it |
+| `src/david/main.rs` | 15.7 % | in fact mostly the end of the search for the `;`, see below |
+| `core/src/slice/iter/macros.rs` | 4.5 % | the loops of `split` and `rsplitn` |
+
+- **Hashing the station name causes most of them.** SipHash takes the key 8 bytes at a time
+  and then handles the rest (length % 8) in steps of 4, 2 and 1 bytes. `perf annotate` shows
+  the branches for that rest in `DefaultHasher::write`:
+
+  ```text
+  cmp  x9, #0x4     // sip.rs:126   at least 4 bytes left?
+  b.cs …
+  cmp  x12, x9      // sip.rs:132   at least 2 left?
+  b.cs …
+  cmp  x11, x9      // sip.rs:137   1 left?
+  b.cc …
+  ```
+
+  Which of them are taken depends on the length of the station name, which changes from row
+  to row, so the predictor often guesses wrong. Profiling on the M4 already showed that
+  hashing costs ~18 % of the time; it's also the biggest source of mispredictions.
+- **The 15.7 % in `main.rs` are mostly the search for the `;`.** `rsplitn` looks for the `;`
+  from the end of the line, one byte at a time:
+
+  ```text
+  17e64: cbz   x26, …          // no bytes left?
+  17e74: ldurb w10, [x9, #-1]  // load the byte before the position
+  17e78: cmp   w10, #0x3b      // is it ';'?
+  17e7c: b.ne  17e64           // no → next byte
+  ```
+
+  It goes through 3, 4 or 5 bytes depending on the length of the temperature, so the `b.ne`
+  at the end is hard to predict. The samples land a few instructions later (*skid*), in the
+  parser that comes right after it: 11.75 % on `ldrb w11, [x9]` (`main.rs:336`) and 7.33 % on
+  `cmp x1, #0x2` (`main.rs:335`), instructions that can't mispredict.
+- **The parser really has no branches**, and the compiler went even further than my code.
+  The annotated instructions of `david::main` (`perf report`, then `a`):
+
+  ```text
+  ldrb  w8, [x9]            first byte
+  cmp   w8, #0x2d           is it '-'?
+  cset  w10, eq             is_negative = 0 or 1, no jump
+  …
+  mul   w10, w10, w12       ones * 10
+  mul   w11, w11, w12       tens * 100
+  csel  w10, w11, wzr, eq   tens * (len == 4)
+  …
+  cneg  w8, w9, eq          value * (1 - (2 * is_negative))
+  ```
+
+  It didn't multiply by `(len == 4)`: it replaced that with `csel` (*conditional select*:
+  take `tens` or zero). And it didn't multiply by `1 - (2 * is_negative)` either: it replaced
+  that with `cneg` (*conditional negate*: flip the sign if the first byte was a `-`). Both use
+  the flags of a comparison instead of a jump, so there's nothing to predict. The only
+  branches left in the parser are the bounds checks, which always pass.
+
+So of the ~1.38 mispredictions per row, ~0.86 come from hashing the name (its length),
+~0.25 – 0.3 from the end of the search for the `;` (the length of the temperature), and the
+rest from the table lookup and the other loops.
+
+**A detailed `perf stat`.** Jon uses `perf stat -d -d`, which adds the counters of the L1
+caches and the TLBs. On the instance it failed (`Failure to read '#slots'Cannot find metric
+or group 'Default'`: `perf` couldn't compute its default derived metrics), so I listed the
+same events by hand:
+
+```sh
+sudo perf stat --all-user -e task-clock,context-switches,cpu-migrations,page-faults,cycles,instructions,stalled-cycles-frontend,stalled-cycles-backend,branches,branch-misses,L1-dcache-loads,L1-dcache-load-misses,L1-icache-loads,L1-icache-load-misses,dTLB-loads,dTLB-load-misses,iTLB-loads,iTLB-load-misses ./target/release/david input/1B_measurements.txt > /dev/null
+```
+
+`--all-user` counts only my code, not the kernel (like `:u`). 18 events don't fit on the few
+counters of a `c7g.large`, so `perf` takes turns between them: each one counted only 14 – 22 %
+of the run, and `perf` scales the result up. So these are estimates. Per row:
+
+| Per row, 1B | Graviton3 | M4 (Instruments, main thread) |
+|---|---|---|
+| Instructions | 379 | 384 |
+| Cycles | 102 | 95 |
+| Instructions per cycle | 3.72 | 4.03 |
+| Branches / mispredicted | 70.9 / 1.43 (2.0 %) | 76.2 / 1.31 (1.7 %) |
+| Loads from the L1 data cache | 85.6 | |
+| of them missed | 0.07 (0.08 %) | |
+| L1 instruction cache misses | 0.006 | |
+| dTLB / iTLB misses | 0.002 / 0.001 | |
+| Cycles the backend stalled | 32.1 (31.5 % of the cycles) | |
+| Cycles the frontend stalled | 6.1 (6 %) | |
+
+- **Almost the same instructions as on the M4** (379 vs 384 per row): the same architecture
+  (ARM64) and the same compiler. The M4 just gets more of them done per cycle.
+- **Memory isn't the problem.** Only 0.08 % of the 85.6 loads per row miss the L1 cache: the
+  file is read in order, so the hardware prefetcher loads it ahead, and the `HashMap` with
+  413 stations fits in L1 (~30 KB, see [TLB](notes/tlb.md#summary)).
+- **The TLB misses are negligible too.** The TLB translates whole pages, and the file is read
+  in order, so a new translation is only needed at the next page. A 4 KB page holds ~300
+  rows, and 13.8 GB are ~3.37 million pages, so about one dTLB miss per page means ~3.4
+  million misses. The 2.3 million measured (2,263,749 / 1 billion rows ≈ 0.002 per row) are
+  the same order; the counter only ran 14 % of the time, and which hardware event the generic
+  `dTLB-load-misses` maps to depends on the CPU. The iTLB translates the addresses of the code,
+  and the program is small and stays in one loop: 940,930 misses for the whole run.
+- **The mispredictions cost ~15 % of the cycles** (1.43 per row × ~11 cycles ≈ 16 of 102),
+  about the same as on the M4.
+- **The backend stalls in 31.5 % of the cycles**, the frontend only in 6 %. Not because of
+  cache misses, there are almost none. My guess is long chains of dependent instructions,
+  each waiting for the result of the one before, as in the rounds of SipHash (a chain of
+  `add`, `rotate` and `xor`). I haven't verified that.
+- **160,266 page faults instead of ~3.4 million.** Linux on ARM uses 4 KB pages, but it has
+  *fault-around*: on a page fault in a mapped file it also maps the pages around it that are
+  already in the page cache, 16 pages (64 KB) by default. 3.37 million / 16 ≈ 210,000, the
+  same order. macOS on the M4 had 842,026, one for every 16 KB page.
+- 104 s of wall time, but only 41.7 s user: the instance waited for its disk (EBS gp3, ~125 MB/s).
 
 On 100M, the program waited again: 3.1 s of wall time, but only 2.5 s of CPU time.
 
@@ -330,12 +465,13 @@ On 100M, the program waited again: 3.1 s of wall time, but only 2.5 s of CPU tim
 Things I want to try later. I'm not doing them yet, because Jon may get to them in a later
 part of the stream, and I don't want to get ahead of him.
 
-- **Find where the remaining ~1.3 branch mispredictions per row happen, with `perf` on
-  Linux.** Instruments can't do it on my Mac (see change #3). On a Linux machine with access
-  to the CPU counters (real hardware or a cloud machine, for example AWS Graviton, not a
-  virtual machine on the Mac): `perf record -e branch-misses:u ./target/release/david
-  input/1B_measurements.txt`, then `perf report` for the functions and `perf annotate` for the
-  instructions. The same machine can also try pinning to one core with `taskset` (see below).
+- **A hasher without branches on the length of the key.** ~62 % of the branch mispredictions
+  come from SipHash handling the rest of the station name (length % 8) with branches (see
+  change #3). A hasher that treats every name the same way, whatever its length, would
+  remove most of them.
+- **Find the `;` without a byte-by-byte loop.** The end of the search for the `;` is the
+  second source of mispredictions (~0.25 – 0.3 per row). The temperature is only 3 – 5
+  bytes, so its position could be found with a fixed number of steps instead of a loop.
 - **Find out what the program waits for on 100M** since change #1 (~0.6 – 0.8 s of wall time
   without CPU time, see change #3), for example with the thread states in a System Trace. One
   guess: the main thread is faster now and catches up with the helper thread, which starts
@@ -350,8 +486,6 @@ part of the stream, and I don't want to get ahead of him.
   collects the lines in a buffer and writes them in a few big calls. With 413 lines it
   doesn't matter yet, but with a bigger output (up to 10,000 stations by the rules) or a
   faster program it will.
-- **Pin the program to one core on Linux** (`taskset`) and see whether the jumps between
-  cores cost anything measurable (see [Something to try later](notes/measurements.md#exact-check-with-instruments)).
 - **Find out why the `HashMap` version runs more instructions per cycle** (5.0 instead of 4.3,
   see [Part 003, change #2](part003-hashmap-bytes-and-lto.md#2-hashmap-instead-of-btreemap-sorted-only-for-the-output)).
   My guess: the linear search in a B-tree node ends at a different key for every station,

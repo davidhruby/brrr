@@ -108,7 +108,78 @@ with `samplers differ`, and without any counter the samples have no call stacks 
 [Part 005, change #3](../part005-parsing-temperature.md#3-parsing-without-branches)).
 Splitting a time-sampled trace by function doesn't help either: it only copies the share of
 time. On Linux, `perf record -e branch-misses` with `perf report` / `perf annotate` does
-exactly this.
+exactly this, and on an AWS Graviton instance it showed that ~62 % of the mispredictions come
+from SipHash hashing the station names (branches on the length of the name) and most of the
+rest from the end of the byte-by-byte search for the `;` (see
+[Part 005, change #3](../part005-parsing-temperature.md#3-parsing-without-branches)).
+
+A sample taken at a mispredicted branch doesn't always point at the branch itself: it often
+lands a few instructions later (*skid*). In my case, ~19 % of the samples were on two
+instructions of the parser that can't mispredict at all, right after the loop searching for
+the `;`. `perf annotate` shows the instructions around, so it's easy to see which branch
+comes just before.
+
+## Browsing a `perf` profile with call stacks (Linux)
+
+`perf report` without `--stdio` opens an interactive browser in the terminal, like in Jon's
+stream. To see who calls what in it, the samples need call stacks:
+
+```sh
+sudo perf record -e branch-misses:u -c 100000 --call-graph dwarf -o perf.data ./target/release/david input/1B_measurements.txt > /dev/null
+sudo perf report -i perf.data
+```
+
+- **`--call-graph dwarf`, not just `-g`.** Plain `-g` follows frame pointers, which a Rust
+  release build doesn't keep, so the stacks come out cut off. With `dwarf`, every sample
+  saves a piece of the stack, and `perf` unwinds it later with the debug info
+  (`debug = "full"`). That also shows the inlined functions, marked `(inlined)`. The file is
+  bigger: ~8 KB per sample, 112 MB for ~13,800 samples.
+- **To sample by time instead of an event**, leave out `-e … -c …` and use `-F 999`
+  (samples per second). The default ~4,000 per second makes huge files with `dwarf`.
+- **Two columns:** *Children* is the function with everything it calls, *Self* only the
+  function itself. `--no-children` sorts by *Self*; `-g caller` shows the tree from the root
+  down.
+
+Keys in the browser:
+
+| Key | What it does |
+|---|---|
+| ↑ ↓ | move between rows |
+| `+` or Enter | expand / collapse the call tree of a row |
+| `E` / `C` | expand / collapse everything |
+| `a` | annotate: the instructions of the function, with the share of samples |
+| `/` | filter by name |
+| `?` | help |
+| `q` | back / quit |
+
+In the annotate view (`a`), *Percent: local period* is the share of the samples inside this
+function only. `s` shows the source lines between the instructions, Enter on a jump follows
+it, `o` shows the addresses, `h` the help. Arrows next to a jump show its direction (↑ back,
+like the end of a loop; ↓ forward).
+
+> **Gotcha: hex addresses instead of names.** Two kinds showed up on the Graviton:
+>
+> - **Above `main`** (who called it), addresses like `0x20af14a9dea0af` or `0x77e1f3c6fd305b`
+>   with an odd first byte. Most likely return addresses signed with *pointer
+>   authentication* (PAC): Graviton3 supports it and Ubuntu's glibc uses it, and `perf`
+>   didn't strip the signature. A bigger piece of the stack (`--call-graph dwarf,65528`, the
+>   maximum) and `sudo apt install libc6-dbg` can help, but for finding where the time goes
+>   it doesn't matter.
+> - **Inside `main`**, addresses like `0xaf14a9df7ec8`: single instructions in inlined code
+>   that `perf` couldn't name. Their last digits match the offsets in `perf annotate`
+>   (`…7ec8` was the `ldrb` right after the loop searching for the `;`).
+
+> **Gotcha: `perf stat -d -d` fails on the Graviton** with `Failure to read '#slots'Cannot
+> find metric or group 'Default'`. `perf` tries to compute its default derived metrics and
+> can't. Listing the events by hand works (`-e cycles,instructions,branches,branch-misses,
+> L1-dcache-loads,L1-dcache-load-misses,…`, the full list is in
+> [Part 005, change #3](../part005-parsing-temperature.md#3-parsing-without-branches)).
+
+> **Gotcha: more events than counters.** A small instance has only a few counters. With more
+> events, `perf` takes turns between them and prints how much of the run each one counted
+> (e.g. `(14.21%)`); the numbers are scaled up from that, so they're estimates, and ratios of
+> two events counted at different times can come out odd (Jon's run showed iTLB misses at
+> 223 % of all iTLB accesses). For exact numbers, measure two or three events at a time.
 
 ## Reading a profile of Rust code on macOS
 

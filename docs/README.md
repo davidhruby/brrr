@@ -19,6 +19,7 @@ Each part covers one step of the video and can span several days. It records:
 | 002  | 2026-10-21 – 2026-10-25   | [Next steps from Part 001](part002-just-poslishments.md) | [`part002`](https://github.com/davidhruby/brrr/tree/part002) |
 | 003  | 2026-10-25 – 2026-10-25   | [HashMap, bytes and LTO](part003-hashmap-bytes-and-lto.md) | [`part003`](https://github.com/davidhruby/brrr/tree/part003) |
 | 004  | 2026-10-26 – 2026-10-28   | [In progress](part004-mmap.md) | [`part004`](https://github.com/davidhruby/brrr/tree/part004) |
+| 005  | 2026-10-30 – 2026-10-31   | [In progress](part005-parsing-temperature.md) | [`part005`](https://github.com/davidhruby/brrr/tree/part005) |
 
 Every part has a git tag with the code as it was at the end of that part. To see it:
 

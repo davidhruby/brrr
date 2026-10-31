@@ -1,5 +1,5 @@
 // this challenge has a rule that all code has to be in one file
-use std::{env, str, thread};
+use std::{env, thread};
 use std::collections::{BTreeMap, HashMap};
 use std::ffi::c_void;
 use std::fs::File;
@@ -13,17 +13,17 @@ const M_ADVISE_SIZE: usize = 512 * MB;
 const MACOS_PAGE_SIZE: usize = 16 * KB;
 
 struct MeasurementStats {
-    min: f32,
-    max: f32,
-    sum: f32,
+    min: i16,
+    max: i16,
+    sum: i64,
     count: u32
 }
 
 impl MeasurementStats {
-    fn update(&mut self, measurement: f32) {
+    fn update(&mut self, measurement: i16) {
         self.min = self.min.min(measurement);
         self.max = self.max.max(measurement);
-        self.sum += measurement;
+        self.sum += i64::from(measurement);
         self.count += 1;
     }
 }
@@ -31,10 +31,10 @@ impl MeasurementStats {
 impl Default for MeasurementStats {
     fn default() -> Self {
         MeasurementStats {
-            min: f32::MAX,
-            max: f32::MIN,
-            sum: 0f32,
-            count: 0u32
+            min: i16::MAX,
+            max: i16::MIN,
+            sum: 0,
+            count: 0
         }
     }
 }
@@ -326,6 +326,42 @@ mod next_block_pre_load_tests {
     }
 }
 
+pub fn parse_temperature(temperature: &[u8]) -> i16 {
+    let mut t: i16 = 0;
+    let mut mul = 1;
+    for &d in temperature.iter().rev() {
+        match d {
+            b'.' => continue,
+            b'-' => {
+                t *= -1;
+                break;
+            },
+            num => {
+                t = t + (num - b'0') as i16 * mul;
+                mul *= 10;
+            }
+        }
+    }
+    t
+}
+
+#[cfg(test)]
+mod parse_temperature_tests {
+    use super::parse_temperature;
+
+    #[test]
+    fn test_parse_temperature() {
+        assert_eq!(parse_temperature(b"99.9"), 999);
+        assert_eq!(parse_temperature(b"2.5"), 25);
+        assert_eq!(parse_temperature(b"0.1"), 1);
+        assert_eq!(parse_temperature(b"0.0"), 0);
+        assert_eq!(parse_temperature(b"-0.1"), -1);
+        assert_eq!(parse_temperature(b"-2.5"), -25);
+        assert_eq!(parse_temperature(b"-99.9"), -999);
+
+    }
+}
+
 fn main() {
     let args: Vec<String> = env::args().collect();
     let input_file_path = &args[1];
@@ -357,19 +393,25 @@ fn main() {
         next_block_pre_load_info.request_next_block_load(&tx, line.as_ptr());
 
         let mut fields = line.rsplitn(2, |c| *c == b';');
-        let temperature = unsafe { str::from_utf8_unchecked(fields.next().unwrap()).parse::<f32>().unwrap() };
-        let station = fields.next().unwrap();
+        let (Some(temperature), Some(station)) = (fields.next(), fields.next()) else {
+            panic!("unexpected line: {:?}", String::from_utf8_lossy(fields.next().unwrap()));
+        };
+        let t = parse_temperature(temperature);
 
         let stat = match stats.get_mut(station) {
             Some(stat) => stat,
             None => stats.entry(station.to_vec()).or_insert(MeasurementStats::default())
         };
-        stat.update(temperature);
+        stat.update(t);
     }
 
     let stats = BTreeMap::from_iter(stats.into_iter().map(|(k, v)| (unsafe { String::from_utf8_unchecked(k) }, v)));
     for (location, MeasurementStats { min, max, sum, count}) in stats.iter() {
-        let mean = sum / (*count as f32);
-        println!("{location}={min:.1}/{mean:.1}/{max:.1}");
+        println!(
+            "{location}={:.1}/{:.1}/{:.1}",
+            (*min as f64) / 10.,
+            (*sum as f64) / 10. / (*count as f64),
+            (*max as f64) / 10.
+        );
     }
 }

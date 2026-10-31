@@ -1,7 +1,7 @@
 # Part 005
 
 **Dates:** 2026-10-30 – 2026-10-31
-**Video progress:** stopped at [1:49:41](https://www.youtube.com/watch?v=tCY7p6dVAGE&t=6581s) when this part was published
+**Video progress:** stopped at [1:57:26](https://www.youtube.com/watch?v=tCY7p6dVAGE&t=7046s) when this part was published
 **Code:** git tag [`part005`](https://github.com/davidhruby/brrr/tree/part005). To get the code exactly as it was for this part: `git checkout part005`
 
 New here? Start with the [Introduction](intro.md).

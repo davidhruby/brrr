@@ -1,5 +1,5 @@
 use brrr::app::parse_temperature;
-use brrr::{parse_f32, parse_temperature_v2};
+use brrr::{parse_f32, parse_temperature_jon_version};
 use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion, Throughput};
 use std::hint::black_box;
 
@@ -31,8 +31,8 @@ fn bench_parse(c: &mut Criterion) {
         });
     }
     for s in ["0.0", "9.9", "-9.9", "99.9", "-99.9"] {
-        group.bench_with_input(BenchmarkId::new("single_parse_temperature_v2", s), s.as_bytes(), |b, input| {
-            b.iter(|| parse_temperature_v2(black_box(input)))
+        group.bench_with_input(BenchmarkId::new("single_parse_parse_temperature_jon_version", s), s.as_bytes(), |b, input| {
+            b.iter(|| parse_temperature_jon_version(black_box(input)))
         });
     }
 
@@ -47,11 +47,11 @@ fn bench_parse(c: &mut Criterion) {
             sum
         })
     });
-    group.bench_function("random_10k_parse_temperature_v2", |b| {
+    group.bench_function("random_10k_parse_parse_temperature_jon_version", |b| {
         b.iter(|| {
             let mut sum: i32 = 0;
             for t in &inputs {
-                sum += parse_temperature_v2(black_box(t)) as i32;
+                sum += parse_temperature_jon_version(black_box(t)) as i32;
             }
             sum
         })

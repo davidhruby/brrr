@@ -327,22 +327,17 @@ mod next_block_pre_load_tests {
 }
 
 pub fn parse_temperature(temperature: &[u8]) -> i16 {
-    let mut t: i16 = 0;
-    let mut mul = 1;
-    for &d in temperature.iter().rev() {
-        match d {
-            b'.' => continue,
-            b'-' => {
-                t *= -1;
-                break;
-            },
-            num => {
-                t = t + (num - b'0') as i16 * mul;
-                mul *= 10;
-            }
-        }
-    }
-    t
+    let is_negative = (temperature[0] == b'-') as usize;
+    let digits = &temperature[is_negative..];
+    let len = digits.len();
+
+    let tenths = (digits[len - 1] - b'0') as i16;
+    let ones = (digits[len - 3] - b'0') as i16;
+    let tens = (digits[0] - b'0') as i16 * (len == 4) as i16;
+
+    let value = tens * 100 + ones * 10 + tenths;
+    // is_negative has 0 or 1 value therefore 1 - (2 * 0) = 1, 1 - (2 * 1) = -1
+    value * (1 - (2 * is_negative as i16))
 }
 
 #[cfg(test)]

@@ -1,7 +1,7 @@
 # Part 005
 
 **Dates:** 2026-10-30 – 2026-10-31
-**Video progress:** stopped at [57:56](https://www.youtube.com/watch?v=tCY7p6dVAGE&t=3476s) when this part was published
+**Video progress:** stopped at [1:49:41](https://www.youtube.com/watch?v=tCY7p6dVAGE&t=6581s) when this part was published
 **Code:** git tag [`part005`](https://github.com/davidhruby/brrr/tree/part005). To get the code exactly as it was for this part: `git checkout part005`
 
 New here? Start with the [Introduction](intro.md).
@@ -86,8 +86,8 @@ println!(
 );
 ```
 
-Measurements after this change (raw output in
-[`measurements/part005/`](../measurements/part005/)):
+Measurements after this change (raw output from commit
+[`9f77420`](https://github.com/davidhruby/brrr/tree/9f77420/measurements/part005)):
 
 | | `david` 100M | `david` 1B |
 |---|---|---|
@@ -103,8 +103,9 @@ output is identical to Part 004 on both files.
 
 On 100M, the CPU time dropped too (2.8 s → 2.7 s), but the wall time went up (2.8 s → 3.4 s):
 the program waited ~0.8 s, and there were almost twice as many involuntary context switches
-(2,741 instead of 1,580). RustRover was starting at the same time as this run, so the 100M
-number needs to be measured again.
+(2,741 instead of 1,580). RustRover was starting at the same time as this run, but the
+waiting showed up again in the 100M run of change #3, so it may not be the reason. I haven't
+found out yet what the program waits for.
 
 ### 2. A benchmark for the temperature parser
 
@@ -211,6 +212,55 @@ In an earlier run of the benchmark, the loop came out much slower (2.0 – 2.3 n
 input, 4.7 ns on random). Most likely because `parse_temperature` still had
 `#[inline(never)]` from profiling, which stops the compiler from inlining it into the
 benchmark loop. A benchmark measures the function together with how it's called.
+
+### 3. Parsing without branches
+
+The parser without branches from the benchmark in change #2 replaces the loop in `main.rs`.
+The loop version stays in `lib.rs` (as `parse_temperature_jon_version`), so the benchmark
+can still compare them.
+
+Before: the loop over the bytes with a `match` (change #1).
+
+After:
+
+```rust
+pub fn parse_temperature(temperature: &[u8]) -> i16 {
+    let is_negative = (temperature[0] == b'-') as usize;
+    let digits = &temperature[is_negative..];
+    let len = digits.len();
+
+    let tenths = (digits[len - 1] - b'0') as i16;
+    let ones = (digits[len - 3] - b'0') as i16;
+    let tens = (digits[0] - b'0') as i16 * (len == 4) as i16;
+
+    let value = tens * 100 + ones * 10 + tenths;
+    // is_negative has 0 or 1 value therefore 1 - (2 * 0) = 1, 1 - (2 * 1) = -1
+    value * (1 - (2 * is_negative as i16))
+}
+```
+
+Measurements after this change (raw output in
+[`measurements/part005/`](../measurements/part005/)):
+
+| | `david` 100M | `david` 1B |
+|---|---|---|
+| Wall time | 3.1 s | 24.7 s |
+| CPU time (user + sys, both threads) | 2.5 s | 26.0 s |
+| Peak memory footprint | 1.9 MB | 8.0 MB |
+| Swapped to the SSD | 0 | 0 |
+| Instructions per row | ~394 | ~404 |
+| CPU cycles | 9.9 billion | 103.7 billion |
+| Page faults | 84,203 | 842,026 |
+
+**1B: 25.4 s → 24.7 s (−3 %).** The output is identical to Part 004 on both files.
+
+The interesting part is where the gain comes from. The instructions per row went down only a
+little (1B ~410 → ~404, −1.5 %), but the cycles went down more (100M 10.7 → 9.9 billion,
+−8 %; 1B 106.3 → 103.7 billion, −2.4 %). So the new parser doesn't do much less work.
+Most likely the CPU just doesn't stall on it any more, because there are no branches left to
+mispredict, as in the benchmark. Why the gain on 1B is smaller than on 100M, I don't know yet.
+
+On 100M, the program waited again: 3.1 s of wall time, but only 2.5 s of CPU time.
 
 ## What I learned
 

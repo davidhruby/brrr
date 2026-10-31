@@ -65,6 +65,74 @@ versions are **identical** on all three files (`diff` prints nothing).
 > `block input operations 0`, even when the process swaps a lot or reads from the SSD. The
 > kernel doesn't fill in these counters. Use `vm_stat` and `iostat` instead.
 
+## Benchmarks of single functions (criterion)
+
+`scripts/measure.sh` measures the whole program. To compare two versions of one small
+function (for example the temperature parser in
+[Part 005](../part005-parsing-temperature.md#2-a-benchmark-for-the-temperature-parser)), a
+benchmark with [criterion](https://docs.rs/criterion) is faster and more precise: it calls
+the function millions of times and does the statistics.
+
+```sh
+# all benchmarks in benches/parse_temperature.rs
+cargo bench --bench parse_temperature
+
+# only the benchmarks whose name contains "random_10k"
+cargo bench --bench parse_temperature -- random_10k
+```
+
+How it's set up:
+
+- The benchmarks are in [`benches/`](../../benches/), criterion is a `[dev-dependencies]`
+  entry in `Cargo.toml` (it's not part of the program), and every benchmark file has a
+  `[[bench]]` entry with `harness = false`, so criterion's own `main` is used.
+- A benchmark can only call code from a library. All the code of the program has to stay in
+  one file, so [`src/david/lib.rs`](../../src/david/lib.rs) includes `main.rs` as a module
+  (`#[path = "main.rs"] pub mod app;`), and a benchmark imports from `brrr::app`.
+- `cargo bench` builds with the `bench` profile, which takes its settings from
+  `[profile.release]` (LTO, debug info).
+
+How to read the output:
+
+```text
+parse/random_10k_parse_temperature_v2
+                        time:   [11.132 µs 11.185 µs 11.243 µs]
+                        thrpt:  [889.42 Melem/s 894.02 Melem/s 898.28 Melem/s]
+                 change:
+                        time:   [+2.8884% +3.4290% +3.9645%] (p = 0.00 < 0.05)
+                        Performance has regressed.
+Found 6 outliers among 100 measurements (6.00%)
+```
+
+- **`time`**: the middle number is the estimate, the outer two are the bounds of the 95 %
+  confidence interval. With 10,000 inputs per iteration, 11.185 µs means ~1.12 ns per input.
+- **`thrpt`**: throughput, inputs per second, if the benchmark sets `Throughput`.
+- **`change`**: the difference to the previous run of the same benchmark (criterion keeps it
+  in `target/criterion/`). Changes of a few percent between runs of the same code are normal
+  on a laptop (clock frequency, temperature), even when criterion calls them a regression.
+- **Outliers**: single measurements far from the rest, usually the system doing something
+  else in the meantime. 5 – 20 % is normal here.
+- An HTML report with charts is in `target/criterion/<group>/report/index.html`. Gnuplot isn't
+  needed ("Gnuplot not found, using plotters backend" is fine).
+
+To compare against a fixed state instead of only the previous run, save a baseline:
+
+```sh
+cargo bench --bench parse_temperature -- --save-baseline before
+# ... change the code ...
+cargo bench --bench parse_temperature -- --baseline before
+```
+
+> **Gotcha: `#[inline(never)]` changes the result.** I added it to see the parser as its own
+> function in the profiler, and forgot it there. The benchmark then measured the function
+> together with a call that can't be inlined: the loop parser came out at 4.7 ns per input
+> instead of 2.8 ns (most likely for this reason, the code was otherwise the same). Remove it
+> before benchmarking.
+
+> **Gotcha: the compiler can compute the result in advance.** Wrap the input in
+> `std::hint::black_box` and return or use the result (for example a sum), otherwise the
+> compiler may drop the work and the benchmark measures nothing.
+
 ## Totals
 
 From `time.txt`:

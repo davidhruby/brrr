@@ -51,7 +51,11 @@ fixed positions counted from the end and turns the comparisons into numbers (`as
 almost as fast as a fixed one.
 
 The lesson: a benchmark with one fixed input can hide the real cost. Always also measure
-with input that varies like the real data.
+with input that varies like the real data. And the other way round: uniformly random input
+can make it look worse than it is. In the whole program on the real 1B file, the branch
+counters showed that the loop parser mispredicted only ~0.1 times per row, and the version
+without branches saved ~6 % of the cycles, not 4× (see
+[Part 005, change #3](../part005-parsing-temperature.md#3-parsing-without-branches)).
 
 ### Too many instructions: hashing
 
@@ -59,6 +63,52 @@ In the Time Profiler of the 100M run, `HashMap::get_mut` took ~28 % of the time,
 was only computing the hash. The default hasher of `HashMap` (SipHash) is built to resist
 attacks with crafted keys, not for speed, so it simply runs a lot of instructions for every
 station name.
+
+## Counting branch mispredictions in Instruments
+
+`/usr/bin/time -l` reports instructions and cycles, but not branches. Instruments can count
+them with the **CPU Counters** instrument (on Linux, `perf stat -e branches,branch-misses`
+does the same):
+
+1. New trace from the **CPU Counters** template. In its recording options, switch
+   *Configuration* from *Guided* to **Manual**, keep *Sample By: Time*.
+2. With `+` under *Events and Formulas*, add:
+   - **Instructions (FIXED_INSTRUCTIONS)** and **Cycles (FIXED_CYCLES)**,
+   - **`INST_BRANCH`**: all executed branches, **`INST_BRANCH_COND`**: the conditional ones
+     (`if`, `match`, the end of a loop),
+   - **`BRANCH_MISPRED_NONSPEC`**: all mispredicted branches,
+     **`BRANCH_COND_MISPRED_NONSPEC`**: the conditional ones.
+
+   `NONSPEC` means only branches that really executed are counted, not the ones on a
+   speculative path the CPU threw away. A green dot next to each event means the chip can
+   count all of them at once (the M4 has only a few programmable counters).
+3. **File → Save As Template…**, for example as "Branches". Then it works from the command
+   line too:
+
+   ```sh
+   sudo purge
+   xctrace record --template 'Branches' --output measurements/part005/branches-v2-1B.trace --launch -- target/release/david input/1B_measurements.txt
+   ```
+
+4. In the trace, the table at the bottom has a column per counter. Select the **Main Thread**,
+   so a helper thread doesn't mix in, and widen the columns, otherwise the numbers are cut off.
+   Divided by the number of rows, they give branches and mispredictions per row.
+
+To compare with an older version without touching the current code, build it in a second
+working tree: `git worktree add ../brrr-9f77420 9f77420` and
+`cargo build --release --manifest-path ../brrr-9f77420/Cargo.toml`.
+
+### Where the mispredictions happen: not with Instruments
+
+The counts above are totals. To see in which functions the mispredictions happen, the
+counters have to be sampled by the event (*Sample By: Events*, for example every 100,000
+`BRANCH_MISPRED_NONSPEC`), so that every sample carries the call stack. On my Mac (M4,
+macOS 26.6) this doesn't work: with any counter in *Events and Formulas* the recording fails
+with `samplers differ`, and without any counter the samples have no call stacks (details in
+[Part 005, change #3](../part005-parsing-temperature.md#3-parsing-without-branches)).
+Splitting a time-sampled trace by function doesn't help either: it only copies the share of
+time. On Linux, `perf record -e branch-misses` with `perf report` / `perf annotate` does
+exactly this.
 
 ## Reading a profile of Rust code on macOS
 

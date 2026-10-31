@@ -254,11 +254,70 @@ Measurements after this change (raw output in
 
 **1B: 25.4 s → 24.7 s (−3 %).** The output is identical to Part 004 on both files.
 
-The interesting part is where the gain comes from. The instructions per row went down only a
-little (1B ~410 → ~404, −1.5 %), but the cycles went down more (100M 10.7 → 9.9 billion,
-−8 %; 1B 106.3 → 103.7 billion, −2.4 %). So the new parser doesn't do much less work.
-Most likely the CPU just doesn't stall on it any more, because there are no branches left to
-mispredict, as in the benchmark. Why the gain on 1B is smaller than on 100M, I don't know yet.
+The instructions per row went down only a little (1B ~410 → ~404), but the cycles went
+down more (100M 10.7 → 9.9 billion, −8 %; 1B 106.3 → 103.7 billion, −2.4 %). Why the gain on
+1B is smaller than on 100M, I don't know yet.
+
+**Branch mispredictions, counted.** To see whether the gain really comes from fewer
+mispredicted branches, I counted them with the CPU Counters instrument in Instruments (how,
+see [Performance](notes/performance.md#counting-branch-mispredictions-in-instruments)), one
+run of each version on 1B, only the main thread:
+
+| Per row (main thread, 1B) | Loop (change #1) | No branches (change #3) | Difference |
+|---|---|---|---|
+| Instructions | 388.20 | 383.57 | −4.62 (−1.2 %) |
+| Cycles | 101.64 | 95.20 | **−6.44 (−6.3 %)** |
+| Instructions per cycle | 3.82 | 4.03 | +5 % |
+| Branches (`INST_BRANCH`) | 86.79 | 76.23 | **−10.56 (−12 %)** |
+| of them conditional (`INST_BRANCH_COND`) | 75.05 | 67.13 | −7.92 |
+| Mispredicted branches (`BRANCH_MISPRED_NONSPEC`) | 1.415 | 1.312 | **−0.103 (−7.3 %)** |
+| Mispredicted of all branches | 1.63 % | 1.72 % | |
+
+What it shows:
+
+- **The new parser removed ~10.6 branches per row, but only ~0.1 mispredicted one.** On the
+  real data, the branch predictor guessed the parser's loop right most of the time and was
+  wrong only about once every ten rows. Much less than the benchmark with uniformly random
+  temperatures suggested.
+- **It does almost the same amount of work.** Only 4.6 instructions per row fewer: the
+  branches were replaced by arithmetic (multiplying by `(len == 4)`, the sign).
+- **The fewer mispredictions don't explain the whole gain.** ~0.1 misprediction × ~13 cycles
+  is ~1.3 cycles, and 4.6 fewer instructions at ~4 per cycle are ~1.2 cycles: together ~2.5
+  of the 6.4 cycles saved. My guess for the rest is a shorter chain of dependencies: in the
+  loop, every digit needs the `t` and `mul` from the step before, while the new version reads
+  the digits independently, so the CPU can work on them at the same time (instructions per
+  cycle went up from 3.82 to 4.03). I haven't verified that.
+- **~1.3 mispredictions per row are still left**, outside the parser. At ~13 cycles each
+  that's ~17 cycles per row, ~18 % of the main thread's time. Likely candidates are the places
+  where a loop stops depending on the data: `split` looking for the `\n`, `rsplitn` looking
+  for the `;`, and comparing the station names in the `HashMap`.
+
+**Where are they? Not measurable with Instruments.** I tried to find out which functions the
+remaining mispredictions come from, and didn't succeed:
+
+- The counters in the trace above are split by function too, but that split is useless:
+  Instruments adds the whole change of a counter since the previous sample (~1 ms, thousands
+  of rows) to the function the program happens to be in at the sample. So the mispredictions
+  per function only copy the share of time (`split` 45.9 % of the samples and 46.0 % of the
+  mispredictions, the `HashMap` 35.1 % and 35.0 %, …). Even the parser without branches got
+  6.4 % of them.
+- The right way is to sample by the event instead of by time (*Sample By: Events*,
+  `BRANCH_MISPRED_NONSPEC` every 100,000): every sample then means 100,000 mispredictions
+  and carries the call stack. On my Mac (M4, macOS 26.6) it doesn't work, neither from
+  `xctrace` (also with `sudo`) nor from the Instruments app. As soon as there's any counter
+  in *Events and Formulas*, even only *Cycles*, the recording fails with
+  `Failed binding 'kdebug-counters-with-pmi-sample' table: samplers differ`. Without any
+  counter it records the samples (100,000 mispredictions each), but without the call stacks,
+  so the profile stays empty. Others report the same problem on the Apple Developer Forums
+  ([sampling on PMI events stopped working](https://developer.apple.com/forums/thread/736381),
+  since Xcode 14.3, also on an M2).
+
+The tool built for exactly this is `perf` on Linux (`perf record -e branch-misses`, then
+`perf report` and `perf annotate`). It needs Linux on real hardware, a virtual machine on the
+Mac doesn't get the CPU counters. It would be a different CPU with a different branch
+predictor, so the counts won't match the M4, but where the mispredictions happen depends
+mostly on the data (the length of a line, of a name, the sign), so it should show the same
+places.
 
 On 100M, the program waited again: 3.1 s of wall time, but only 2.5 s of CPU time.
 
@@ -270,6 +329,17 @@ On 100M, the program waited again: 3.1 s of wall time, but only 2.5 s of CPU tim
 
 Things I want to try later. I'm not doing them yet, because Jon may get to them in a later
 part of the stream, and I don't want to get ahead of him.
+
+- **Find where the remaining ~1.3 branch mispredictions per row happen, with `perf` on
+  Linux.** Instruments can't do it on my Mac (see change #3). On a Linux machine with access
+  to the CPU counters (real hardware or a cloud machine, for example AWS Graviton, not a
+  virtual machine on the Mac): `perf record -e branch-misses:u ./target/release/david
+  input/1B_measurements.txt`, then `perf report` for the functions and `perf annotate` for the
+  instructions. The same machine can also try pinning to one core with `taskset` (see below).
+- **Find out what the program waits for on 100M** since change #1 (~0.6 – 0.8 s of wall time
+  without CPU time, see change #3), for example with the thread states in a System Trace. One
+  guess: the main thread is faster now and catches up with the helper thread, which starts
+  the next chunk only half a chunk ahead.
 
 - **Check the waiting in Instruments.** The `thread-state` table of a System Trace shows how
   long the thread was running and how long it was blocked, which would confirm the waiting

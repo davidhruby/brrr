@@ -16,16 +16,15 @@ saves their raw, unmodified output:
 ```sh
 # a fresh RAM disk with the two small files
 diskutil erasevolume APFS RAMDisk $(hdiutil attach -nomount ram://4194304)
-cp input/1M_measurements.txt input/100M_measurements.txt /Volumes/RAMDisk/
+cp input/100M_measurements.txt /Volumes/RAMDisk/
 
 cargo build --release
 
-scripts/measure.sh david 1M part004
-scripts/measure.sh david 100M part004
+scripts/measure.sh david 100M part005
 
 hdiutil detach /Volumes/RAMDisk
 
-scripts/measure.sh david 1B part004
+scripts/measure.sh david 1B part005
 ```
 
 > **Gotcha: the RAM disk isn't guaranteed to stay in RAM.** Its memory is ordinary memory, so

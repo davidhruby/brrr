@@ -19,6 +19,10 @@ path = "src/analyze/xctrace/main.rs"
 name = "analyze-tlb-size"
 path = "src/analyze/tlb_size/main.rs"
 
+[lib]
+name = "brrr"
+path = "src/david/lib.rs"
+
 [profile.release]
 lto = "fat"
 debug = "full"
@@ -29,3 +33,10 @@ serde = { version = "1.0.229", features = ["derive"] }
 rustc-demangle = "0.1.28"
 rand = { version = "0.10.3", features = ["thread_rng"]}
 libc = "0.2.191"
+
+[dev-dependencies]
+criterion = { version = "0.5", features = ["html_reports"] }
+
+[[bench]]
+name = "parse_temperature"
+harness = false

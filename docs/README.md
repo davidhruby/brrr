@@ -39,6 +39,7 @@ Notes mostly for myself, not needed to follow the parts:
   RAM.
 - [Rust](notes/rust.md): general notes about Rust, starting with its history.
 - [TLB](notes/tlb.md): measuring the TLB sizes of the M4, which Apple doesn't publish.
+- [Performance](notes/performance.md): finding out why code is slow, not just where.
 
 ## Adding a new entry
 

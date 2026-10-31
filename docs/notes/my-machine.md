@@ -120,6 +120,197 @@ hw.perflevel1.name: Efficiency
 
 </details>
 
+## Virtual memory: from a virtual to a physical address
+
+A program never sees physical RAM, only virtual addresses. This section is how the CPU
+turns one into the other. The TLB sizes I measured are in [TLB](tlb.md).
+
+### Three different things called L1 / L2 / L3
+
+The same names show up in three places that have nothing to do with each other:
+
+| Name | What it is | Where | Who manages it | What it holds |
+|---|---|---|---|---|
+| L1 / L2 **cache** | copies of data and code from RAM | in the CPU (L1 per core, L2 per cluster) | the hardware | 128-byte cache lines |
+| L1 / L2 **TLB** | a cache of finished address translations | in the CPU, separate from the data caches | the hardware fills it; the kernel only throws entries out (`TLBI`) when it changes a mapping | virtual page → physical frame + permissions |
+| L1 / L2 / L3 **page tables** | the levels of the tree that describes the translation | in RAM, one tree per process | the kernel | 8-byte descriptors |
+
+The page table descriptors are entries of the page tables, not file descriptors. ARM calls
+the page table levels "level 0–3 lookup" (on macOS a user address starts at level 1, so
+only L1–L3 are used), Intel calls them PML4/PDPT/PD/PT. The only place where the three
+meet: on a TLB miss, the page walker reads the descriptors through the normal data caches.
+
+### TLB layout (one core)
+
+```text
+┌──────────┐   ┌──────────┐
+│ L1 iTLB  │   │ L1 dTLB  │   small and fastest
+│  (code)  │   │  (data)  │   L1 dTLB: ~128 entries (~2 MB)
+└────┬─────┘   └────┬─────┘
+     └──────┬───────┘
+     miss   │
+     ┌──────▼──────┐
+     │   L2 TLB    │   bigger, shared by code and data
+     │             │   ~3,072 entries (~48 MB)
+     └──────┬──────┘
+     miss   │
+     ┌──────▼──────┐
+     │ page walker │   reads descriptors from the page tables
+     └─────────────┘   through the data caches / RAM
+```
+
+- **iTLB** translates the addresses of instructions (where the CPU fetches code from),
+  **dTLB** the addresses of the data that loads and stores touch. One `ldr x0, [x1]` can
+  need both: the iTLB for the address of the instruction, the dTLB for `x1`. They're
+  separate because code fetch and data accesses happen in the same cycle in different
+  parts of the core. The iTLB also checks that the page may be executed, the dTLB that it
+  may be read or written.
+- **Lookup order:** L1 TLB → L2 TLB → page walk. The result of a page walk is stored in
+  both levels, so the next access to the same page is a hit.
+- **No extra instructions.** The whole translation, including the page walk, is done by
+  the hardware. A miss only makes the one instruction take longer: ~11–14 cycles for an
+  L2 TLB hit, ~28 more for a page walk with the page tables in the cache (measured in
+  [TLB](tlb.md)), hundreds if the descriptors have to come from RAM. Kernel code runs only
+  on a **page fault**, when a descriptor is invalid.
+- **A TLB hit gives a translation, not data.** With the physical address, the data is
+  then read through the caches as usual: L1 → L2 → SLC → RAM. A TLB hit and a cache hit
+  are two independent things.
+
+### Virtual address space
+
+- A page has 16 KB = 2¹⁴ bytes (`sysctl hw.pagesize` = 16384), so the lowest **14 bits**
+  of an address are the **offset** inside the page.
+- A user address on macOS has **47 bits**, so **33 bits** are left for the number of the
+  page: 2³³ ≈ **8.6 billion** virtual pages.
+- 8.6 billion pages × 16 KB = 2⁴⁷ bytes = **128 TB** of virtual address space per process.
+  That's only the range of addresses, not memory: the machine has 16 GB of RAM.
+- A flat table with one 8-byte entry per page would take 8.6 billion × 8 B = **64 GB per
+  process**, which wouldn't fit into RAM. A process really uses a tiny part of the address
+  space (code, heap, stack, libraries), so the page tables are a **tree** instead: where a
+  descriptor in L1 or L2 is invalid, the whole region below it has no tables at all.
+  A small process needs a few 16 KB tables, not 64 GB.
+
+**Why three levels:** one table is one page: 16 KB / 8 B = **2,048 descriptors**, so the
+index into one table has **11 bits** (2¹¹ = 2048). The 33 bits of the page number are
+exactly 3 × 11. For comparison, x86-64 with 4 KB pages: 48 − 12 = 36 bits, 512 entries
+per table = 9 bits per level, so 4 levels. The bigger pages save one memory read per page
+walk, and one TLB entry covers 4× more memory.
+
+How much one descriptor covers:
+
+| Level | One descriptor covers |
+|---|---|
+| L3 (a page) | 16 KB |
+| L2 | 32 MB (2,048 × 16 KB) |
+| L1 | 64 GB (2,048 × 32 MB) |
+
+The offset (14 bits) and the index (11 bits) both come from the same 16 KB, but the offset
+counts bytes, the index counts 8-byte descriptors: 14 = 11 + 3, because 2³ = 8.
+
+### Splitting an address
+
+The virtual address itself carries the index for every level:
+
+```text
+bit:  46        36 35        25 24        14 13            0
+     [ L1 index   | L2 index   | L3 index   |   offset     ]
+        11 b         11 b         11 b          14 b
+```
+
+Example: `0x1_2345_6789`. Its 9 hex digits are only 36 bits, because the top bits are zero
+and aren't written (like 42 instead of 00042). Padded with 11 zeros to 47 bits:
+
+```text
+VA = 00000000000 | 00010010001 | 10100010101 | 10011110001001
+         L1            L2            L3           offset
+          0           145          1301        0x2789 (10,121)
+```
+
+Each field is taken out with a shift and a mask:
+
+- `>> n` drops the lowest n bits, so the field moves to the right end,
+- `& mask` keeps only the lowest bits: `0x3FFF` = 14 ones, `0x7FF` = 11 ones.
+
+| Field | Shift (bits of the fields below it) | Mask | Result |
+|---|---|---|---|
+| offset | 0 | `0x3FFF` | `0x2789` = 10,121 |
+| L3 | 14 | `0x7FF` | `0x48D15 & 0x7FF` = `0x515` = 1,301 |
+| L2 | 14 + 11 = 25 | `0x7FF` | `0x91` = 145 |
+| L1 | 14 + 11 + 11 = 36 | `0x7FF` | 0 |
+
+The L3 row in binary:
+
+```text
+  VA >> 14 = 00000000000 | 00010010001 | 10100010101     ← the offset is gone
+& 0x7FF    = 00000000000 | 00000000000 | 11111111111
+           = 00000000000 | 00000000000 | 10100010101     = 0x515 = 1301
+```
+
+In the CPU this costs nothing: the wires from those bits of the address simply lead to
+the right part of the circuit.
+
+### Page walk, step by step
+
+On an L2 TLB miss, the page walker repeats the same step for each level:
+
+```text
+descriptor address = table address + index × 8   →   read 8 bytes   →   take bits 47:14
+```
+
+Bits 47:14 of a descriptor are the physical address of the next table (in L1 and L2) or of
+the page (in L3); the mask for them is `0x0000_FFFF_FFFF_C000`. The physical address of the
+L1 table comes from the register `TTBR0_EL1`, which the kernel switches together with the
+process. The descriptor values below are made up for the example; the real ones are written
+by the kernel when it maps memory, the CPU only reads them.
+
+| Step | Descriptor address | Read value | Meaning |
+|---|---|---|---|
+| L1 | `0x8_0000_0000` (TTBR0) + 0 × 8 = `0x8_0000_0000` | `0x0000_0008_0000_4003` | bits 1:0 = `11`: table → L2 table at `0x8_0000_4000` |
+| L2 | `0x8_0000_4000` + 145 × 8 (`0x488`) = `0x8_0000_4488` | `0x0000_0008_0000_8003` | table → L3 table at `0x8_0000_8000` |
+| L3 | `0x8_0000_8000` + 1301 × 8 (`0x28A8`) = `0x8_0000_A8A8` | `0x0060_0002_048D_0F43` | page at `0x2_048D_0000` |
+
+The flags of the L3 descriptor:
+
+| Bits | Value | Meaning |
+|---|---|---|
+| 1:0 | `11` | valid page |
+| 4:2 | `000` | AttrIndx: index into `MAIR_EL1`, normal memory |
+| 7:6 | `01` | AP: user may read and write |
+| 9:8 | `11` | SH: shared between cores |
+| 10 | `1` | AF: the page has been accessed |
+| 11 | `1` | nG: belongs to one process (its ASID) |
+| 47:14 | `0x2_048D_0000` | physical address of the page |
+| 53, 54 | `1`, `1` | PXN, UXN: code may not run from this page |
+
+The final physical address is the page plus the offset:
+`0x2_048D_0000 | 0x2789` = `0x2_048D_2789`. The translation is stored in the TLB, the
+permissions are checked, and the data is read from the caches or RAM.
+
+What can change the walk:
+
+- **An invalid descriptor** (bit 0 = 0) at any level is a translation fault. The kernel
+  either maps the page (allocates it, decompresses it, reads it back from swap) and the
+  instruction runs again, or the process gets `SIGSEGV`.
+- **A block descriptor** in L2 (bits 1:0 = `01`) ends the walk one level early: a 32 MB
+  page, with a 25-bit offset.
+- **The page walk cache** remembers the upper levels ("the L3 table for this region is
+  at …"), so often only the L3 descriptor has to be read.
+
+The virtual addresses never change. What the kernel changes is the content of the tables
+(when memory is mapped, unmapped, swapped or its permissions change), and then it throws
+the old translation out of the TLB. The L3 descriptors change most often, the L1 ones
+almost never.
+
+To check the numbers, in `python3`:
+
+```python
+va = 0x1_2345_6789
+print((va >> 36) & 0x7FF, (va >> 25) & 0x7FF, (va >> 14) & 0x7FF, hex(va & 0x3FFF))
+desc = 0x0060_0002_048D_0F43
+page = desc & 0x0000_FFFF_FFFF_C000
+print(hex(page), hex(page | (va & 0x3FFF)))
+```
+
 ## Storage: how fast can the file be read?
 
 | | |

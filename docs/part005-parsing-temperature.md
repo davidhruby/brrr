@@ -106,6 +106,112 @@ the program waited ~0.8 s, and there were almost twice as many involuntary conte
 (2,741 instead of 1,580). RustRover was starting at the same time as this run, so the 100M
 number needs to be measured again.
 
+### 2. A benchmark for the temperature parser
+
+To compare parsers without running the whole 1B file, I added a benchmark with
+[criterion](https://docs.rs/criterion) (`cargo bench --bench parse_temperature`, in
+[`benches/parse_temperature.rs`](../benches/parse_temperature.rs)). A benchmark can only
+call code from a library, and the rules want all the code of the program in one file, so
+`src/david/lib.rs` includes `main.rs` as a module instead of moving code out of it:
+
+```rust
+#[allow(dead_code)]
+#[path = "main.rs"]
+pub mod app;
+```
+
+Three parsers are compared.
+
+`parse::<f32>()`, as in Part 004:
+
+```rust
+pub fn parse_f32(temperature: &[u8]) -> f32 {
+    unsafe { str::from_utf8_unchecked(temperature).parse().unwrap() }
+}
+```
+
+`parse_temperature` from change #1, the loop over the bytes with a `match`:
+
+```rust
+pub fn parse_temperature(temperature: &[u8]) -> i16 {
+    let mut t: i16 = 0;
+    let mut mul = 1;
+    for &d in temperature.iter().rev() {
+        match d {
+            b'.' => continue,
+            b'-' => {
+                t *= -1;
+                break;
+            },
+            num => {
+                t = t + (num - b'0') as i16 * mul;
+                mul *= 10;
+            }
+        }
+    }
+    t
+}
+```
+
+`parse_temperature_v2` (only in `lib.rs` for now), with no loop and no `if`. It reads the
+digits from fixed positions counted from the end: the tenths are always last, the ones
+always two bytes before them, and the tens are at the start only when there are two digits.
+The comparisons are turned into numbers (`as i16`, 0 or 1) instead of being used in an `if`:
+
+```rust
+pub fn parse_temperature_v2(temperature: &[u8]) -> i16 {
+    let is_negative = (temperature[0] == b'-') as usize;
+    let digits = &temperature[is_negative..];
+    let len = digits.len();
+
+    let tenths = (digits[len - 1] - b'0') as i16;
+    let ones = (digits[len - 3] - b'0') as i16;
+    let tens = (digits[0] - b'0') as i16 * (len == 4) as i16;
+
+    let value = tens * 100 + ones * 10 + tenths;
+    // is_negative has 0 or 1 value therefore 1 - (2 * 0) = 1, 1 - (2 * 1) = -1
+    value * (1 - (2 * is_negative as i16))
+}
+```
+
+Each one runs on five fixed inputs (`0.0`, `9.9`, `-9.9`, `99.9`, `-99.9`), and on 10,000
+random temperatures from −99.9 to 99.9:
+
+```rust
+group.bench_function("random_10k_parse_temperature", |b| {
+    b.iter(|| {
+        let mut sum: i32 = 0;
+        for t in &inputs {
+            sum += parse_temperature(black_box(t)) as i32;
+        }
+        sum
+    })
+});
+```
+
+`black_box` hides the input from the compiler, so it can't compute the result in advance,
+and returning `sum` keeps it from dropping the loop.
+
+| | `0.0` | `9.9` | `-9.9` | `99.9` | `-99.9` | 10,000 random (per input) |
+|---|---|---|---|---|---|---|
+| `parse::<f32>()` | 4.49 ns | 4.47 ns | 4.47 ns | 4.75 ns | 4.71 ns | 8.96 ns |
+| `parse_temperature` (loop) | 1.26 ns | 1.25 ns | 1.50 ns | 1.66 ns | 1.89 ns | 2.79 ns |
+| `parse_temperature_v2` (no branches) | 0.85 ns | 0.85 ns | 0.85 ns | 0.85 ns | 0.85 ns | 1.12 ns |
+
+**On random input, the loop is 3.2× faster than `parse::<f32>()`, and the version without
+branches 8×.** The loop gets slower with every byte (1.25 ns for `9.9`, 1.89 ns for
+`-99.9`), and on random input it's slower than on any fixed one (2.79 ns): with a fixed
+input, the branch predictor learns how many times the loop runs and whether a `-` comes;
+with random input, the length and the sign change every time and it often guesses wrong.
+The version without branches takes the same 0.85 ns on every input, so there's nothing to
+predict, and random input costs only a little more (1.12 ns), mostly for reading 10,000
+separate `Vec`s.
+
+In an earlier run of the benchmark, the loop came out much slower (2.0 – 2.3 ns on fixed
+input, 4.7 ns on random). Most likely because `parse_temperature` still had
+`#[inline(never)]` from profiling, which stops the compiler from inlining it into the
+benchmark loop. A benchmark measures the function together with how it's called.
+
 ## What I learned
 
 ## Next steps

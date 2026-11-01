@@ -211,6 +211,56 @@ version without branches, which came out the same in both tools and with the sma
 So the numbers of a micro-benchmark hold only for the code compiled exactly as in that
 benchmark; what decides in the end is measuring the whole program.
 
+### With the counters, on Linux (AWS Graviton3)
+
+The same benchmark on the `c7g.large` instance, after
+`sudo sysctl kernel.perf_event_paranoid=2` (micromeasure says itself what it needs:
+`kernel.perf_event_paranoid=4; lower it to 2 or less`). The output then says
+`Measurement: timing + PMU` and adds the counters per operation:
+
+```text
+│Cycles / op           │                     87120.1║IPC                   │                       4.136│
+│Branches / op         │                     39942.2║                      │                            │
+│Branch Miss Rate      │                     0.0027%║Branch Misses / op    │                      1.0939│
+│Cache Refs / op       │                  88202.9509║Cache Miss Rate       │                       0.43%│
+│Cache Misses / op     │                    375.0413║                      │                            │
+│L1I Misses / op       │                      0.1787║                      │                            │
+│Frontend Stall / op   │                     16.4772║Frontend Stall %      │                       0.02%│
+│Backend Stall / op    │                  38954.8199║Backend Stall %       │                      44.71%│
+```
+
+Per temperature (÷ 10,000):
+
+| | `parse::<f32>()` | Loop with `match` | No branches |
+|---|---|---|---|
+| Time | 18.4 ns | 7.9 ns | 3.6 ns |
+| Cycles | 44.4 | 19.2 | 8.7 |
+| Instructions per cycle | 3.02 | 2.98 | 4.14 |
+| Instructions (cycles × IPC) | ~134 | ~57 | ~36 |
+| Branches | 28.8 | 16.5 | 4.0 |
+| Mispredicted branches | 0.72 (2.5 %) | 0.42 (2.5 %) | 0.0001 |
+| Frontend stall | 6.6 % | 16.8 % | 0.02 % |
+| Backend stall | 22.5 % | 6.1 % | 44.7 % |
+| Cache misses | 0.02 | 0.03 | 0.04 |
+
+What the results mean is in
+[Performance](performance.md#what-the-counters-of-the-micro-benchmark-show). Notes on the
+output:
+
+- **The Graviton3 is ~2.3 – 3× slower than the M4** (lower clock, ~2.6 vs ~4.4 GHz, and fewer
+  instructions per cycle), but the order and the ratios are the same.
+- **The spread is ten times smaller than on the Mac** (coefficient of variation 0.16 –
+  0.38 % instead of 1.5 – 8 %): nothing else runs on the instance, no browser, no editor.
+- **`PMU counter coverage was too low … 19.5% scheduled`:** the same multiplexing as with
+  `perf stat`, more counters than a `c7g.large` has, so each one counted only ~20 % of the
+  time and the values are scaled up. The ratios between the parsers still hold.
+- **`Regressions: 3 benchmarks, -3.7%`** compared with the run before isn't a regression of
+  the code: the run before measured only the time. Taking turns between the counters
+  interrupts the program, and that costs ~3 – 4 %.
+- **`possible bottlenecks: Likely data-side memory latency`** for the version without
+  branches doesn't fit: there are almost no cache misses (0.04 per temperature). It's an
+  automatic guess from the backend stall alone.
+
 ## Measuring on Linux with `perf` (AWS)
 
 macOS can't show where the branch mispredictions happen (see

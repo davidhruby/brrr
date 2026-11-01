@@ -112,6 +112,42 @@ benchmark was wrong, but it wasn't:
 - **The wall time on 1B** also depends on the disk and the helper thread, so it shows even
   less of the gain than the CPU time.
 
+### What the counters of the micro-benchmark show
+
+On Linux, micromeasure adds the CPU counters to every benchmark (per temperature, on an AWS
+Graviton3, details in [Measurements](measurements.md#with-the-counters-on-linux-aws-graviton3)):
+
+| | `parse::<f32>()` | Loop with `match` | No branches |
+|---|---|---|---|
+| Cycles | 44.4 | 19.2 | 8.7 |
+| Instructions per cycle | 3.02 | 2.98 | 4.14 |
+| Mispredicted branches | 0.72 | 0.42 | 0.0001 |
+| Frontend stall | 6.6 % | 16.8 % | 0.02 % |
+| Backend stall | 22.5 % | 6.1 % | 44.7 % |
+
+A CPU core is a pipeline with two halves. The **frontend** prepares the instructions: it
+predicts where the program goes, fetches the instructions and decodes them. The **backend**
+executes them: it waits until their inputs are ready (results of earlier instructions, data
+from memory), computes them and retires them. A *frontend stall* means the backend could
+work but gets no instructions, typically after a mispredicted branch (everything fetched on
+the wrong path is thrown away) or an instruction cache miss. A *backend stall* means the
+instructions are there but can't run yet: waiting for data, for the result of the
+instruction before, or for a free execution unit.
+
+- **The version without branches really has no mispredictions**, ~1 per 10,000
+  temperatures. Its 4 branches per temperature are bounds checks and the benchmark's loop,
+  which are always predicted right.
+- **The loop mispredicts 0.42 times per temperature on the random input**, against ~0.1 per
+  row on the real data in the whole program: direct proof that uniformly random input
+  exaggerates the mispredictions. At ~12 cycles each that's ~5 of its 19.2 cycles, and it
+  shows as the 16.8 % frontend stall.
+- **Without branches, the bottleneck moved to the backend** (44.7 % backend stall, the
+  frontend now delivers smoothly). Not cache misses, there are almost none. My guess: with
+  the inputs as a `Vec<Vec<u8>>`, the pointer to each temperature has to be loaded first and
+  only then its bytes, two dependent loads of ~4 cycles each, and in a function of only ~36
+  instructions that waiting is a big share. With the temperatures in one continuous buffer, as
+  in the real file, it would be different. I haven't verified that.
+
 ### Lessons
 
 - Before optimizing a function, look at **its share of the whole program** in a profile. A

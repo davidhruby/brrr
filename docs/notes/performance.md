@@ -64,6 +64,70 @@ was only computing the hash. The default hasher of `HashMap` (SipHash) is built 
 attacks with crafted keys, not for speed, so it simply runs a lot of instructions for every
 station name.
 
+## Micro-benchmarks vs the whole program
+
+A micro-benchmark measures one small function, millions of times. It's fast to run and
+precise, but its numbers don't carry over to the whole program one to one. How to set up the
+two tools I used is in [Measurements](measurements.md#benchmarks-of-single-functions-criterion)
+(criterion) and [Measurements](measurements.md#benchmarks-with-hardware-counters-micromeasure)
+(micromeasure).
+
+### Two tools, the same parsers
+
+The three temperature parsers, per temperature on 10,000 random inputs, on the Mac:
+
+| | criterion | micromeasure (median) |
+|---|---|---|
+| `parse::<f32>()` | 9.0 ns | 7.5 ns |
+| Loop with `match` | 2.0 ns | 2.5 ns |
+| Fixed positions, no branches | 1.17 ns | 1.20 ns |
+
+The same order and the same scale, but the loop and `parse::<f32>()` differ by up to ~20 %
+between the tools. Each benchmark file is a separate program, and the measuring loops around
+the parser differ slightly (the type of the sum, how it's kept alive with `black_box`), so
+the compiler can inline and schedule the code differently. Even moving the loop parser from
+`main.rs` to `lib.rs` changed its criterion result from 2.8 ns to 2.0 ns. The version without
+branches came out the same everywhere.
+
+The spread shows the same thing. In micromeasure, the loop had its 95th percentile 10 % above
+the median and a median absolute deviation of 4.6 %; the version without branches 2.7 % and
+1.0 %. Code with data-dependent branches reacts more to its surroundings, probably also to
+what the branch predictor still remembers from the previous samples (my guess).
+
+### What a micro-benchmark promises, and what the program gets
+
+The version without branches was 2.5× faster than the loop in the benchmark (2.8 → 1.1 ns),
+but the whole program on 1B rows got only from 25.4 s to 24.7 s. That looks like the
+benchmark was wrong, but it wasn't:
+
+- **The absolute numbers fit.** 1.7 ns saved per temperature × 1 billion rows ≈ 1.7 s. The
+  program saved 6.4 cycles per row (CPU counters), ~1.5 s of CPU time at ~4.4 GHz, and the Time
+  Profiler showed 1.05 s less in the main thread. The same order.
+- **The parser is only a small part of the program** (~7.5 % of the main thread's time).
+  Even an infinitely fast parser couldn't make the program more than ~7.5 % faster
+  (*Amdahl's law*). A big speedup of a small part is a small speedup of the whole.
+- **Uniformly random input made the loop look worse than it is.** On the real data the loop
+  mispredicted only ~0.1 times per row, much less than on the benchmark's random
+  temperatures, so the real gain was a bit smaller than the benchmark's.
+- **The wall time on 1B** also depends on the disk and the helper thread, so it shows even
+  less of the gain than the CPU time.
+
+### Lessons
+
+- Before optimizing a function, look at **its share of the whole program** in a profile. A
+  2.5× faster function at 7.5 % of the time saves at most ~4.5 %.
+- Feed the benchmark **input that looks like the real data**, ideally a sample of the real
+  file, not uniformly random values. Fixed input hides mispredictions, uniform random input
+  exaggerates them.
+- Compare the **absolute time saved** (ns per call × number of calls) with the program, not
+  the speedup factor.
+- Keep the wrapper around every measured function **the same** (`black_box` placement, type of
+  the sum), and don't trust differences of 10 – 20 % between different benchmark programs.
+- `#[inline(never)]` (handy for the profiler) changes the result: the loop parser came out at
+  4.7 ns instead of 2.8 ns in the benchmark, and the whole program on 1B at 25.55 s instead of
+  24.70 s. Remove it before measuring.
+- In the end, **the whole program decides.**
+
 ## Counting branch mispredictions in Instruments
 
 `/usr/bin/time -l` reports instructions and cycles, but not branches. Instruments can count

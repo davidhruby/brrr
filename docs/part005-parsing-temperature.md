@@ -110,8 +110,8 @@ found out yet what the program waits for.
 ### 2. A benchmark for the temperature parser
 
 To compare parsers without running the whole 1B file, I added a benchmark with
-[criterion](https://docs.rs/criterion) (`cargo bench --bench parse_temperature`, in
-[`benches/parse_temperature.rs`](../benches/parse_temperature.rs)). A benchmark can only
+[criterion](https://docs.rs/criterion) (`cargo bench --bench parse_temperature_criterion`, in
+[`benches/parse_temperature_criterion.rs`](../benches/parse_temperature_criterion.rs)). A benchmark can only
 call code from a library, and the rules want all the code of the program in one file, so
 `src/david/lib.rs` includes `main.rs` as a module instead of moving code out of it:
 

@@ -74,11 +74,11 @@ benchmark with [criterion](https://docs.rs/criterion) is faster and more precise
 the function millions of times and does the statistics.
 
 ```sh
-# all benchmarks in benches/parse_temperature.rs
-cargo bench --bench parse_temperature
+# all benchmarks in benches/parse_temperature_criterion.rs
+cargo bench --bench parse_temperature_criterion
 
 # only the benchmarks whose name contains "random_10k"
-cargo bench --bench parse_temperature -- random_10k
+cargo bench --bench parse_temperature_criterion -- random_10k
 ```
 
 How it's set up:
@@ -118,9 +118,9 @@ Found 6 outliers among 100 measurements (6.00%)
 To compare against a fixed state instead of only the previous run, save a baseline:
 
 ```sh
-cargo bench --bench parse_temperature -- --save-baseline before
+cargo bench --bench parse_temperature_criterion -- --save-baseline before
 # ... change the code ...
-cargo bench --bench parse_temperature -- --baseline before
+cargo bench --bench parse_temperature_criterion -- --baseline before
 ```
 
 > **Gotcha: `#[inline(never)]` changes the result.** I added it to see the parser as its own
@@ -132,6 +132,84 @@ cargo bench --bench parse_temperature -- --baseline before
 > **Gotcha: the compiler can compute the result in advance.** Wrap the input in
 > `std::hint::black_box` and return or use the result (for example a sum), otherwise the
 > compiler may drop the work and the benchmark measures nothing.
+
+## Benchmarks with hardware counters (micromeasure)
+
+[micromeasure](https://github.com/rdaum/micromeasure) (`0.16`) is a benchmark harness like
+criterion, but it also shows the hardware counters (instructions, branches, branch
+mispredictions, cache misses) of every benchmark. It reads them through `perf` on Linux only;
+on macOS it measures only the time and prints `Measurement: timing only`. The same three
+parsers as in the criterion benchmark are in
+[`benches/parse_temperature_micromeasure.rs`](../../benches/parse_temperature_micromeasure.rs).
+
+```sh
+cargo bench --bench parse_temperature_micromeasure
+```
+
+How it's set up:
+
+- Its own file and its own `[[bench]]` entry with `harness = false`. It can't share a file
+  with criterion: `criterion_main!` and `benchmark_main!` both generate a `main`.
+- The inputs come from [`benches/common/mod.rs`](../../benches/common/mod.rs)
+  (`generate_inputs`), used by both benchmark files with `mod common;`. Cargo doesn't treat
+  a file in a subfolder of `benches/` as a benchmark of its own.
+- **A context with the inputs.** A struct holding the 10,000 temperatures implements
+  `BenchContext`; its `prepare` generates them, outside of the measured part.
+- **The bench function** is `fn(ctx: &mut ParserContext, chunk_size: usize, chunk_num: usize)`.
+  micromeasure calibrates `chunk_size` so that one sample takes ~50 ms, and the function has
+  to do exactly `chunk_size` operations. Here one operation parses all 10,000 temperatures, so
+  the group says `Throughput::per_operation(10_000, "temperatures")`, and the time per
+  operation has to be divided by 10,000 to get the time per temperature.
+- **The same wrapper for every parser:** `black_box` on the input, the results summed up,
+  `black_box` on the sum at the end. Different wrappers (another `black_box`, another type of
+  sum) would compare more than just the parsers.
+
+On Linux, for the counters, the user needs access to them (Ubuntu's default
+`perf_event_paranoid` is 4, see [Measuring on Linux](#measuring-on-linux-with-perf-aws)).
+`cargo bench` can't run under `sudo` (root doesn't have `cargo` from rustup in its path), so
+lower the setting instead, until the next reboot:
+
+```sh
+sudo sysctl kernel.perf_event_paranoid=1
+cargo bench --bench parse_temperature_micromeasure
+```
+
+How to read the output (one benchmark from a run on the Mac):
+
+```text
+│Throughput            │      398.91 Mtemperatures/s║Median Throughput     │      402.98 Mtemperatures/s│
+│Mean Latency          │              25068.28 ns/op║Median Latency        │              24815.37 ns/op│
+│P95 Latency           │              27394.68 ns/op║MAD Latency           │               1141.99 ns/op│
+│Samples               │                         100║Outliers              │                           3│
+│Coefficient Var.      │                       8.03%║Measurement           │                 timing only│
+```
+
+- **Median Latency:** half of the samples were faster, half slower. Per operation, so here
+  24,815 ns / 10,000 ≈ 2.5 ns per temperature.
+- **P95 Latency:** 95 % of the samples were faster than this, the slow end.
+- **MAD** (*median absolute deviation*): the typical distance of a sample from the median. A
+  measure of the spread that a few extreme samples don't throw off.
+- **Coefficient Var.:** the standard deviation as a share of the mean.
+- **Measurement:** `timing only` on macOS; on Linux with access to the counters, the
+  counters too.
+- At the end there's a summary of the group with the fastest and slowest benchmark, and the
+  results are saved as JSON in `target/benchmark_results_<timestamp>.json`.
+
+The two tools on the same parsers, per temperature (10,000 random inputs, on the Mac):
+
+| | micromeasure (median) | criterion |
+|---|---|---|
+| `parse::<f32>()` | 7.5 ns | 9.0 ns |
+| loop with `match` | 2.5 ns (spread: P95 +10 %, MAD 4.6 %) | 2.0 ns |
+| no branches | 1.20 ns (P95 +2.7 %, MAD 1.0 %) | 1.17 ns |
+
+The same order and the same scale, but up to ~20 % apart for the loop and `parse::<f32>()`.
+Each benchmark file is a separate program, and the measuring loops differ slightly (the type
+of the sum, how it's kept alive), so the compiler can inline and schedule the code around the
+parser differently. Code with branches and dependencies reacts to that much more than the
+version without branches, which came out the same in both tools and with the smallest spread.
+So the numbers of a micro-benchmark hold only for the code compiled exactly as in that
+benchmark; what decides in the end is measuring the whole program.
 
 ## Measuring on Linux with `perf` (AWS)
 

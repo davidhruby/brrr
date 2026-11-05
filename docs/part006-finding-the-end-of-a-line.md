@@ -1,4 +1,4 @@
-# Part 006
+# Part 006 — Finding the end of a line
 
 **Dates:** 2026-11-02 – 2026-11-05
 **Video progress:** stopped at [2:35:32](https://www.youtube.com/watch?v=tCY7p6dVAGE&t=9332s) when this part was published
@@ -36,7 +36,7 @@ loop {
         break;
     } else {
         let line_len = unsafe { (next_new_line as *const u8).offset_from_unsigned(rest.as_ptr()) };
-        // line_len is count wihthout \n therefore +1 in the end
+        // line_len is count without \n therefore +1 in the end
         at += line_len + 1;
         &rest[..line_len]
     };
@@ -469,7 +469,7 @@ part of the stream, and I don't want to get ahead of him.
   second source of mispredictions (~0.25 – 0.3 per row). The temperature is only 3 – 5
   bytes, so its position could be found with a fixed number of steps instead of a loop.
 - **Find out what the program waits for on 100M** since change #1 (~0.6 – 0.8 s of wall time
-  without CPU time, see [Part 005](part005-parsing-temperature.md#3-parsing-without-branches) and change #1 below), for example with the thread states in a System Trace. One
+  without CPU time, see [Part 005](part005-parsing-temperature.md#3-parsing-without-branches) and change #1 above), for example with the thread states in a System Trace. One
   guess: the main thread is faster now and catches up with the helper thread, which starts
   the next chunk only half a chunk ahead.
 - **Check the waiting in Instruments.** The `thread-state` table of a System Trace shows how

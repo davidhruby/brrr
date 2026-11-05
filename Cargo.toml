@@ -43,5 +43,17 @@ name = "parse_temperature_criterion"
 harness = false
 
 [[bench]]
+name = "parse_newline_criterion"
+harness = false
+
+[[bench]]
+name = "parse_semicolon_criterion"
+harness = false
+
+[[bench]]
+name = "parse_newline_and_semicolon_criterion"
+harness = false
+
+[[bench]]
 name = "parse_temperature_micromeasure"
 harness = false

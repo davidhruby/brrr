@@ -22,6 +22,7 @@ Each part covers one step of the video and can span several days. It records:
 | 005  | 2026-10-30 – 2026-10-31   | [In progress](part005-parsing-temperature.md) | [`part005`](https://github.com/davidhruby/brrr/tree/part005) |
 | 006  | 2026-11-02 – 2026-11-05   | [In progress](part006-finding-the-end-of-a-line.md) | [`part006`](https://github.com/davidhruby/brrr/tree/part006) |
 | 007  | 2026-11-05 – 2026-11-05   | [In progress](part007-hashing.md) | [`part007`](https://github.com/davidhruby/brrr/tree/part007) |
+| 008  | 2026-11-06 – 2026-11-06   | [In progress](part008-short-strings.md) | [`part008`](https://github.com/davidhruby/brrr/tree/part008) |
 
 Every part has a git tag with the code as it was at the end of that part. To see it:
 

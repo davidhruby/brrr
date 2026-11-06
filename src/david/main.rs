@@ -631,7 +631,15 @@ impl AsRef<[u8]> for StrVec {
 
 impl PartialEq for StrVec {
     fn eq(&self, other: &Self) -> bool {
-        self.as_ref() == other.as_ref()
+        unsafe {
+            if self.inlined[LAST] != 0x00 || other.inlined[LAST] != 0x00 {
+                // at least one is short: all 16 bytes decide, a short and a long key never match
+                u128::from_ne_bytes(self.inlined) == u128::from_ne_bytes(other.inlined)
+            } else {
+                // both long: compare the names on the heap
+                self.as_ref() == other.as_ref()
+            }
+        }
     }
 }
 
@@ -677,9 +685,19 @@ fn main() {
 
         let t = parse_temperature(temperature);
 
-        let stat = match stats.get_mut(station) {
-            Some(stat) => stat,
-            None => stats.entry(StrVec::new(station)).or_insert(MeasurementStats::default())
+        let stat = if station.len() < INLINE {
+            // short name: look up by StrVec, so that StrVec's PartialEq (two u64 / one u128) is used
+            let key = StrVec::new(station);
+            match stats.get_mut(&key) {
+                Some(stat) => stat,
+                None => stats.entry(key).or_insert(MeasurementStats::default()),
+            }
+        } else {
+            // long name: look up by &[u8] as before, StrVec::new would allocate on every row
+            match stats.get_mut(station) {
+                Some(stat) => stat,
+                None => stats.entry(StrVec::new(station)).or_insert(MeasurementStats::default()),
+            }
         };
         stat.update(t);
     }

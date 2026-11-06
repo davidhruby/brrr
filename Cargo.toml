@@ -19,6 +19,10 @@ path = "src/analyze/xctrace/main.rs"
 name = "analyze-tlb-size"
 path = "src/analyze/tlb_size/main.rs"
 
+[[bin]]
+name = "analyze-collision"
+path = "src/analyze/collision/main.rs"
+
 [lib]
 name = "brrr"
 path = "src/david/lib.rs"
@@ -56,4 +60,8 @@ harness = false
 
 [[bench]]
 name = "parse_temperature_micromeasure"
+harness = false
+
+[[bench]]
+name = "hashmap_criterion"
 harness = false

@@ -1,0 +1,413 @@
+Cape Town
+Albuquerque
+Kumasi
+Copenhagen
+Kuwait City
+Bouaké
+Petropavlovsk-Kamchatsky
+Changsha
+Los Angeles
+Veracruz
+İzmir
+Kinshasa
+Ouahigouya
+Mzuzu
+George Town
+Lisbon
+Vaduz
+Guatemala City
+Astana
+Irkutsk
+Napier
+Garissa
+Djibouti
+Warsaw
+Manila
+Khartoum
+Las Palmas de Gran Canaria
+Colombo
+Chongqing
+Bulawayo
+San Salvador
+Gaborone
+Helsinki
+Kyoto
+Minsk
+London
+Oslo
+Sapporo
+Palermo
+Libreville
+Vilnius
+Edinburgh
+Baguio
+Lyon
+Yerevan
+Havana
+Accra
+Odesa
+Bergen
+Malabo
+Dodoma
+Nicosia
+Edmonton
+Alexandra
+Whitehorse
+Winnipeg
+Abidjan
+Nouadhibou
+Saint-Pierre
+Alice Springs
+Bishkek
+Launceston
+Fianarantsoa
+Asmara
+San Juan
+Wrocław
+Makassar
+Rome
+Maun
+Aden
+Frankfurt
+Toliara
+Lubumbashi
+Wichita
+Jayapura
+Dikson
+Bata
+Brazzaville
+Maputo
+Rabat
+Baltimore
+Ségou
+Belize City
+Belgrade
+Nouakchott
+Reggane
+Calgary
+Mombasa
+Zagreb
+Moncton
+Tashkent
+Burnie
+Nassau
+Port-Gentil
+Chicago
+Berlin
+Bissau
+Beirut
+Tamanrasset
+Brussels
+Bamako
+Tauranga
+Chiang Mai
+Mahajanga
+Podgorica
+Stockholm
+Saint Petersburg
+Cairo
+Anadyr
+Hong Kong
+Yinchuan
+Nakhon Ratchasima
+Honolulu
+La Ceiba
+Tirana
+Kathmandu
+Dakar
+Ho Chi Minh City
+Thiès
+Praia
+Hamburg
+Tunis
+Timbuktu
+Mandalay
+Novosibirsk
+Philadelphia
+Medan
+Saskatoon
+Nuuk
+Tijuana
+Guangzhou
+Monterrey
+Marseille
+Antananarivo
+Mexicali
+Dubai
+Batumi
+Milwaukee
+Sokoto
+Conakry
+Tel Aviv
+Ankara
+Ifrane
+Christchurch
+Pyongyang
+Paris
+El Paso
+Algiers
+Omaha
+Honiara
+Oklahoma City
+Yellowknife
+Dunedin
+Fairbanks
+Hobart
+Austin
+Murmansk
+Tegucigalpa
+Cairns
+Baghdad
+Tromsø
+Dushanbe
+Da Lat
+Suva
+Dallas
+Sydney
+Malé
+Tallinn
+Da Nang
+Gangtok
+Milan
+Pontianak
+Suwałki
+Istanbul
+Port Moresby
+Toluca
+Las Vegas
+Skopje
+Phnom Penh
+Muscat
+Port Vila
+Kandi
+Mango
+Roseau
+Bosaso
+Yakutsk
+Niamey
+Santo Domingo
+St. John's
+Mek'ele
+Brisbane
+Seville
+Blantyre
+Amsterdam
+Sacramento
+Yaoundé
+Pretoria
+Adelaide
+Surabaya
+Toamasina
+Athens
+Indianapolis
+Hamilton
+Bilbao
+Vladivostok
+Porto
+Upington
+Denpasar
+Almaty
+Wau
+Mumbai
+Luxembourg City
+Barcelona
+Abha
+Karonga
+New Orleans
+Erzurum
+Karachi
+Bangui
+Ashgabat
+Palembang
+Addis Ababa
+Hanga Roa
+Hat Yai
+Riyadh
+La Paz
+Dar es Salaam
+Birao
+Willemstad
+Anchorage
+Yangon
+Bujumbura
+Ürümqi
+Assab
+Arkhangelsk
+Lomé
+Banjul
+Rostov-on-Don
+Ouagadougou
+Palm Springs
+Abéché
+Kabul
+Alexandria
+Vancouver
+Oranjestad
+Ndola
+Lviv
+Damascus
+Chittagong
+Tokyo
+Virginia Beach
+Mogadishu
+Kolkata
+Taipei
+Houston
+Douala
+Palmerston North
+Heraklion
+Napoli
+Montreal
+Halifax
+Riga
+Ahvaz
+Pittsburgh
+Lagos
+Jos
+Dili
+Memphis
+Kano
+Valencia
+Tehran
+Rangpur
+Portland (OR)
+Moscow
+Entebbe
+San Jose
+Atlanta
+Flores,  Petén
+Odienné
+Columbus
+Minneapolis
+Nashville
+Thessaloniki
+Dublin
+Madrid
+Nairobi
+Tabora
+Seattle
+Fresno
+Tucson
+Durban
+Parakou
+Mexico City
+Tripoli
+Jerusalem
+Hiroshima
+San Francisco
+Dampier
+San José
+Kyiv
+Sochi
+St. Louis
+Melbourne
+Andorra la Vella
+Bloemfontein
+New York City
+Bridgetown
+Ouarzazate
+Luanda
+N'Djamena
+Shanghai
+Miami
+Bucharest
+Beijing
+Ulaanbaatar
+Bordeaux
+Monaco
+Benghazi
+Washington, D.C.
+Singapore
+Erbil
+Kuala Lumpur
+Zanzibar City
+Hargeisa
+Sarajevo
+Ngaoundéré
+Gjoa Haven
+Baku
+Kansas City
+Lake Tekapo
+Dhaka
+Kankan
+Wellington
+Gabès
+Lake Havasu City
+Busan
+Louisville
+Tampa
+Marrakesh
+Valletta
+Chihuahua
+City of San Marino
+Ljubljana
+Hanoi
+Phoenix
+Bratislava
+Cabo San Lucas
+Lhasa
+Toronto
+Harbin
+Harare
+Bangkok
+Chișinău
+Garoua
+Makurdi
+Iqaluit
+Lodwar
+Johannesburg
+Tabriz
+Villahermosa
+Darwin
+Dolisie
+Kunming
+Boise
+Sofia
+San Antonio
+Kampala
+Ottawa
+Charlotte
+Denver
+Panama City
+Managua
+Pointe-Noire
+Jakarta
+Cracow
+Prague
+Reykjavík
+Antsiranana
+New Delhi
+Port Sudan
+Tamale
+Sana'a
+Manama
+Niigata
+Jacksonville
+Xi'an
+Kingston
+Zürich
+Boston
+Split
+San Diego
+Budapest
+Seoul
+Guadalajara
+Canberra
+Gagnoa
+Naha
+Detroit
+Vientiane
+Auckland
+Cotonou
+Livingstone
+Salt Lake City
+Juba
+Lahore
+Kuopio
+Lusaka
+Ghanzi
+Perth
+Vienna
+Fukuoka
+Tbilisi
+Oulu

@@ -5,6 +5,7 @@ use std::{env, thread};
 use std::collections::{BTreeMap, HashMap};
 use std::ffi::c_void;
 use std::fs::File;
+use std::hash::{BuildHasher, Hasher};
 use std::os::fd::AsRawFd;
 use std::simd::u8x64;
 use std::simd::prelude::SimdPartialEq;
@@ -77,7 +78,7 @@ mod m_mem_message_tests {
     }
 }
 
-struct MMapHelper {
+pub struct MMapHelper {
     ptr: *mut c_void,
     file_len: usize,
 }
@@ -85,7 +86,7 @@ struct MMapHelper {
 // all libc mmap / madvise calls live here
 impl MMapHelper {
     // we cannot use external dependency therefore this way copied from memmap2 lib
-    fn new(file: &File, file_len: usize) -> Self {
+    pub fn new(file: &File, file_len: usize) -> Self {
         // SAFETY: creating a new memory map with a nullptr as address hint is always sound:
         // it does not modify any existing mapping or memory contents.
         unsafe {
@@ -105,7 +106,7 @@ impl MMapHelper {
         }
     }
 
-    fn as_slice(&self) -> &[u8] {
+    pub fn as_slice(&self) -> &[u8] {
         unsafe { std::slice::from_raw_parts(self.ptr as *const u8, self.file_len) }
     }
 
@@ -509,6 +510,69 @@ mod station_temperature_iterator_tests {
     }
 }
 
+pub struct IdealHasherBuilder;
+pub struct IdealHasher(u64);
+
+impl BuildHasher for IdealHasherBuilder {
+    type Hasher = IdealHasher;
+
+    fn build_hasher(&self) -> Self::Hasher {
+        IdealHasher(0x243F_6A88_85A3_08D3)
+    }
+}
+
+impl IdealHasher {
+    const K: u64 = 0x9E37_79B9_7F4A_7C15;
+
+    fn folded_multiply(a: u64, b: u64) -> u64 {
+        let m = a as u128 * b as u128;
+        (m >> 64) as u64 ^ m as u64
+    }
+
+    fn read_u64(bytes: &[u8]) -> u64 {
+        u64::from_le_bytes(bytes[..8].try_into().unwrap())
+    }
+}
+
+impl Hasher for IdealHasher {
+    fn finish(&self) -> u64 {
+        // final mix, so that the top bits (hashbrown's tag) depend on everything
+        Self::folded_multiply(self.0, Self::K)
+    }
+
+    // Hash for [u8] writes the length first; mix it in cheaply instead of as a whole block
+    fn write_usize(&mut self, len: usize) {
+        self.0 ^= len as u64;
+    }
+
+    fn write(&mut self, bytes: &[u8]) {
+        let len = bytes.len();
+        let (a, b) = if len >= 8 {
+            // first 8 and last 8 bytes, they overlap for names of 8 – 15 bytes
+            let mut a = Self::read_u64(bytes);
+            let b = Self::read_u64(&bytes[len - 8..]);
+            // the middle of names longer than 16 bytes (rare)
+            let mut i = 8;
+            while i + 8 < len - 8 {
+                a = Self::folded_multiply(a ^ Self::read_u64(&bytes[i..]), Self::K);
+                i += 8;
+            }
+            (a, b)
+        } else if len >= 4 {
+            // first 4 and last 4 bytes, they overlap for names of 4 – 7 bytes
+            let a = u32::from_le_bytes(bytes[..4].try_into().unwrap()) as u64;
+            let b = u32::from_le_bytes(bytes[len - 4..].try_into().unwrap()) as u64;
+            (a, b)
+        } else if len > 0 {
+            // 1 – 3 bytes: first, middle and last byte
+            let a = bytes[0] as u64 | (bytes[len / 2] as u64) << 8 | (bytes[len - 1] as u64) << 16;
+            (a, 0)
+        } else {
+            (0, 0)
+        };
+        self.0 = Self::folded_multiply(a ^ self.0, b ^ Self::K);
+    }
+}
 
 fn main() {
     let args: Vec<String> = env::args().collect();
@@ -531,7 +595,7 @@ fn main() {
     let mut next_block_pre_load_info = NextBlockPreLoadInfo::new(map.as_ptr(), file_len, M_ADVISE_SIZE);
     next_block_pre_load_info.request_first_block_load(&tx);
 
-    let mut stats: HashMap<Vec<u8>, MeasurementStats> = HashMap::with_capacity(10_000);
+    let mut stats: HashMap<Vec<u8>, MeasurementStats, IdealHasherBuilder> = HashMap::with_capacity_and_hasher(10_000, IdealHasherBuilder);
     for (station, temperature) in StationTemperatureIterator::new(map) {
         // trigger next block preload into RAM if needed
         next_block_pre_load_info.request_next_block_load(&tx, station.as_ptr());

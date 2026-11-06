@@ -8,10 +8,11 @@ pub mod app;
 use std::collections::HashMap;
 use std::ffi::{c_int, c_void};
 use std::hash::{BuildHasher, Hasher};
+use std::iter;
 use libc::size_t;
 use std::simd::{u8x16, u8x32, u8x64};
 use std::simd::prelude::SimdPartialEq;
-use crate::app::MeasurementStats;
+use crate::app::{IdealHasherBuilder, MeasurementStats};
 
 pub fn parse_f32(temperature: &[u8]) -> f32 {
     unsafe { str::from_utf8_unchecked(temperature).parse().unwrap() }
@@ -352,4 +353,89 @@ mod next_stations_and_temperatures_merged_simd_64_tests {
         assert_eq!(result.third, Some((b"Durban".as_slice(), b"12.2".as_slice())));
         assert_eq!(result.fallback_result, false);
     }
+}
+
+pub fn hashmap_upsert(stats: &mut HashMap<Vec<u8>, MeasurementStats>, station: &[u8], temperature: i16) {
+    let stat = match stats.get_mut(station) {
+        Some(stat) => stat,
+        None => stats.entry(station.to_vec()).or_insert(MeasurementStats::default())
+    };
+    stat.update(temperature);
+}
+
+pub fn hashmap_upsert_custom_hash_builder(stats: &mut HashMap<Vec<u8>, MeasurementStats, FastHasherBuilder>, station: &[u8], temperature: i16) {
+    let stat = match stats.get_mut(station) {
+        Some(stat) => stat,
+        None => stats.entry(station.to_vec()).or_insert(MeasurementStats::default())
+    };
+    stat.update(temperature);
+}
+
+pub fn hashmap_upsert_ideal_hash_builder(stats: &mut HashMap<Vec<u8>, MeasurementStats, IdealHasherBuilder>, station: &[u8], temperature: i16) {
+    let stat = match stats.get_mut(station) {
+        Some(stat) => stat,
+        None => stats.entry(station.to_vec()).or_insert(MeasurementStats::default())
+    };
+    stat.update(temperature);
+}
+
+pub struct FastHasherBuilder;
+pub struct FastHasher(u64);
+
+impl BuildHasher for FastHasherBuilder {
+    type Hasher = FastHasher;
+
+    fn build_hasher(&self) -> Self::Hasher {
+        FastHasher(0xcbf29ce484222325)
+    }
+}
+
+impl Hasher for FastHasher {
+    fn finish(&self) -> u64 {
+        self.0
+    }
+    fn write(&mut self, bytes: &[u8]) {
+        let (chunks,remainder) = bytes.as_chunks::<8>();
+        let mut last = [1u8; 8];
+        (last[..remainder.len()].copy_from_slice(remainder));
+        for &chunk in chunks.iter().chain(iter::once(&last)) {
+            let mixed = self.0 as u128 * (u64::from_ne_bytes(chunk) as u128);
+            self.0 = (mixed >> 64) as u64 ^ mixed as u64;
+        }
+    }
+}
+
+#[test]
+fn collisions_fast_hasher() {
+    use std::collections::{HashMap, HashSet};
+    use std::hash::BuildHasher;
+    use std::fs::File;
+    use crate::app::{MMapHelper, StationTemperatureIterator};
+
+    let file = File::open("input/1B_measurements.txt").unwrap();
+    let file_len: usize = file.metadata().unwrap().len() as usize;
+    let m_m_helper = MMapHelper::new(&file, file_len);
+    let map = m_m_helper.as_slice();
+
+    // FIXME tohle je problem. cely vektor zabere strasne mista. je potreba delat spodni cast postupne misto pouzivani cele pameti
+    let stations = StationTemperatureIterator::new(map)
+        .map(|(station, _)| station)
+        .collect::<Vec<&[u8]>>();
+
+    // FIXME => mam napad ze kdyz zvednu slots tak bude mene kolizi (nejlepe zadne) a pak to bude super rychle jen to musi vlezt do SIMD
+    // FIXME => tohle chces hlavne udelat pro klasickou HashMap => tady zacit!
+    // with_capacity(10_000) gives 16_384 slots (a power of two)
+    let slots = 16_384u64;
+    let hashes: Vec<u64> = stations.iter().map(|name| FastHasherBuilder.hash_one(name)).collect();
+
+    let distinct = |f: &dyn Fn(u64) -> u64| hashes.iter().map(|&h| f(h)).collect::<HashSet<_>>().len();
+    println!("names:            {}", stations.len());
+    println!("distinct hashes:  {}", distinct(&|h| h));
+    println!("distinct slots:   {}", distinct(&|h| h & (slots - 1)));
+    println!("distinct tags:    {} of 128", distinct(&|h| h >> 57));
+
+    // the biggest group of names with the same hash
+    let mut groups: HashMap<u64, usize> = HashMap::new();
+    for &h in &hashes { *groups.entry(h).or_default() += 1; }
+    println!("largest group:    {}", groups.values().max().unwrap());
 }

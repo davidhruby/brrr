@@ -137,7 +137,7 @@ fn main() {
         stats.2 += 1;
         stats.3 = stats.3.max(t);
     }
-    
+
     let stats = BTreeMap::from_iter(
         stats
             .iter()

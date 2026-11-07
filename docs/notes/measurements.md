@@ -27,6 +27,15 @@ hdiutil detach /Volumes/RAMDisk
 scripts/measure.sh david 1B part008
 ```
 
+on the linux machine with enough RAM:
+```sh
+sudo mkdir -p /mnt/ramdisk
+sudo mount -t tmpfs -o size=15G tmpfs /mnt/ramdisk
+cp /home/ubuntu/brrr/input/1B_measurements.txt /mnt/ramdisk/
+
+time ./target/release/jonhoo /mnt/ramdisk/1B_measurements.txt > /dev/null
+```
+
 > **Gotcha: the RAM disk isn't guaranteed to stay in RAM.** Its memory is ordinary memory, so
 > under memory pressure macOS can swap it out to the SSD like any other. Once I ran the 1B
 > version of `david` while the RAM disk was still there, and the next 100M run spent its

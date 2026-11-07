@@ -119,6 +119,50 @@ mod split_semicolon_tests {
     }
 }
 
+pub fn split_semicolon_simd(line: &[u8]) -> (&[u8], &[u8]) {
+    const DELIMITER: u8x64 = u8x64::splat(b';');
+    if line.len() > 64 {
+        // fallback to normal not optimized approach
+        line.rsplit_once(|c| *c == b';').unwrap()
+    } else {
+        let del_eq = DELIMITER.simd_eq(u8x64::load_or_default(line));
+        // SAFETY: we are promised there is a ; in every line
+        let index_of_delim = unsafe { del_eq.first_set().unwrap_unchecked() };
+        (&line[..index_of_delim], &line[index_of_delim + 1..])
+    }
+}
+
+pub fn split_semicolon_simd_copy(line: &[u8]) -> (&[u8], &[u8]) {
+    const DELIMITER: u8x64 = u8x64::splat(b';');
+    if line.len() > 64 {
+        return line.rsplit_once(|c| *c == b';').unwrap();
+    } else {
+        let mut buf = [0u8; 64];
+        buf[..line.len()].copy_from_slice(line);
+        let del_eq = DELIMITER.simd_eq(u8x64::from_array(buf));
+        // SAFETY: we are promised there is a ; in every line
+        let index_of_delim = unsafe { del_eq.first_set().unwrap_unchecked() };
+        (&line[..index_of_delim], &line[index_of_delim + 1..])
+    }
+}
+
+pub fn split_semicolon_simd_from_data<'a>(data: &'a [u8], start: usize, line: &'a [u8]) -> (&'a [u8], &'a [u8]) {
+    const DELIMITER: u8x64 = u8x64::splat(b';');
+    if line.len() > 64 {
+        return line.rsplit_once(|c| *c == b';').unwrap();
+    } else {
+        let simd_value = if start + 64 <= data.len() {
+            u8x64::from_slice(&data[start..start + 64])
+        } else {
+            u8x64::load_or_default(line)
+        };
+        let del_eq = DELIMITER.simd_eq(simd_value);
+        // SAFETY: we are promised there is a ; in every line
+        let index_of_delim = unsafe { del_eq.first_set().unwrap_unchecked() };
+        (&line[..index_of_delim], &line[index_of_delim + 1..])
+    }
+}
+
 pub fn next_line_jon_version<'a>(map: &'a [u8], at: &mut usize) -> Option<&'a [u8]> {
     let rest = &map[*at..];
     let next_new_line = unsafe { libc::memchr(rest.as_ptr() as *const c_void, b'\n' as c_int, rest.len() as size_t) };
@@ -129,20 +173,6 @@ pub fn next_line_jon_version<'a>(map: &'a [u8], at: &mut usize) -> Option<&'a [u
         // line_len is count wihthout \n therefore +1 in the end
         *at += line_len + 1;
         Some(&rest[..line_len])
-    }
-}
-
-pub fn split_semicolon_simd(line: &[u8]) -> (&[u8], &[u8]) {
-    const DELIMITER: u8x64 = u8x64::splat(b';');
-    if line.len() > 64 {
-        // fallback to normal not optimized approach
-        line.rsplit_once(|c| *c == b';').unwrap()
-    } else {
-
-        let del_eq = DELIMITER.simd_eq(u8x64::load_or_default(line));
-        // SAFETY: we are promised there is a ; in every line
-        let index_of_delim = unsafe { del_eq.first_set().unwrap_unchecked() };
-        (&line[..index_of_delim], &line[index_of_delim + 1..])
     }
 }
 

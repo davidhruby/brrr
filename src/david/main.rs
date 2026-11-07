@@ -1,11 +1,11 @@
 #![feature(portable_simd)]
 
 // this challenge has a rule that all code has to be in one file
-use std::{env, thread, borrow::Borrow};
+use std::{env, thread};
 use std::collections::{BTreeMap, HashMap};
 use std::ffi::c_void;
 use std::fs::File;
-use std::hash::{BuildHasher, Hash, Hasher};
+use std::hash::{BuildHasher, Hasher};
 use std::os::fd::AsRawFd;
 use std::simd::u8x64;
 use std::simd::prelude::SimdPartialEq;
@@ -552,7 +552,7 @@ impl Hasher for IdealHasher {
             let mut a = Self::read_u64(bytes);
             let b = Self::read_u64(&bytes[len - 8..]);
             // the middle of names longer than 16 bytes (rare)
-            let mut i  = 8;
+            let mut i = 8;
             while i + 8 < len - 8 {
                 a = Self::folded_multiply(a ^ Self::read_u64(&bytes[i..]), Self::K);
                 i += 8;
@@ -571,89 +571,6 @@ impl Hasher for IdealHasher {
             (0, 0)
         };
         self.0 = Self::folded_multiply(a ^ self.0, b ^ Self::K);
-    }
-}
-
-const INLINE: usize = 16;
-const LAST: usize = INLINE - 1;
-
-union StrVec {
-    inlined: [u8; INLINE],
-    // if length high bit is set, then inlined into pointer then len
-    // otherwise, pointer is a pointer to Vec<u8>
-    heap: (usize, *mut u8),
-}
-
-impl StrVec {
-    pub fn new(s: &[u8]) -> Self {
-        if s.len() < INLINE {
-            let mut combined = [0u8; INLINE];
-            combined[..s.len()].copy_from_slice(s);
-            combined[LAST] = s.len() as u8 + 1;
-            Self { inlined: combined }
-        } else {
-            let ptr = Box::into_raw(s.to_vec().into_boxed_slice());
-            Self {
-                heap: (ptr.len().to_be(), ptr as *mut u8),
-            }
-        }
-    }
-}
-
-impl Drop for StrVec {
-    fn drop(&mut self) {
-        if unsafe { self.inlined[LAST] } == 0x00 {
-            unsafe {
-                let len = usize::from_be(self.heap.0);
-                let ptr = self.heap.1;
-                let slice_ptr = std::ptr::slice_from_raw_parts_mut(ptr, len);
-                let _ = Box::from_raw(slice_ptr);
-            }
-        }
-    }
-}
-
-impl AsRef<[u8]> for StrVec {
-    fn as_ref(&self) -> &[u8] {
-        unsafe {
-            if self.inlined[LAST] != 0x00 {
-                let len = self.inlined[LAST] as usize - 1;
-                // &self.inlined[..len]
-                std::slice::from_raw_parts(self.inlined.as_ptr(), len)
-            } else {
-                let len = usize::from_be(self.heap.0);
-                let ptr = self.heap.1;
-                std::slice::from_raw_parts(ptr, len)
-            }
-        }
-    }
-}
-
-impl PartialEq for StrVec {
-    fn eq(&self, other: &Self) -> bool {
-        unsafe {
-            if self.inlined[LAST] != 0x00 || other.inlined[LAST] != 0x00 {
-                // at least one is short: all 16 bytes decide, a short and a long key never match
-                u128::from_ne_bytes(self.inlined) == u128::from_ne_bytes(other.inlined)
-            } else {
-                // both long: compare the names on the heap
-                self.as_ref() == other.as_ref()
-            }
-        }
-    }
-}
-
-impl Eq for StrVec {}
-
-impl Hash for StrVec {
-    fn hash<H: Hasher>(&self, state: &mut H) {
-        self.as_ref().hash(state)
-    }
-}
-
-impl Borrow<[u8]> for StrVec {
-    fn borrow(&self) -> &[u8] {
-        self.as_ref()
     }
 }
 
@@ -678,31 +595,21 @@ fn main() {
     let mut next_block_pre_load_info = NextBlockPreLoadInfo::new(map.as_ptr(), file_len, M_ADVISE_SIZE);
     next_block_pre_load_info.request_first_block_load(&tx);
 
-    let mut stats: HashMap<StrVec, MeasurementStats, IdealHasherBuilder> = HashMap::with_capacity_and_hasher(10_000, IdealHasherBuilder);
+    let mut stats: HashMap<Vec<u8>, MeasurementStats, IdealHasherBuilder> = HashMap::with_capacity_and_hasher(10_000, IdealHasherBuilder);
     for (station, temperature) in StationTemperatureIterator::new(map) {
         // trigger next block preload into RAM if needed
         next_block_pre_load_info.request_next_block_load(&tx, station.as_ptr());
 
         let t = parse_temperature(temperature);
 
-        let stat = if station.len() < INLINE {
-            // short name: look up by StrVec, so that StrVec's PartialEq (two u64 / one u128) is used
-            let key = StrVec::new(station);
-            match stats.get_mut(&key) {
-                Some(stat) => stat,
-                None => stats.entry(key).or_insert(MeasurementStats::default()),
-            }
-        } else {
-            // long name: look up by &[u8] as before, StrVec::new would allocate on every row
-            match stats.get_mut(station) {
-                Some(stat) => stat,
-                None => stats.entry(StrVec::new(station)).or_insert(MeasurementStats::default()),
-            }
+        let stat = match stats.get_mut(station) {
+            Some(stat) => stat,
+            None => stats.entry(station.to_vec()).or_insert(MeasurementStats::default())
         };
         stat.update(t);
     }
 
-    let stats = BTreeMap::from_iter(stats.iter().map(|(k, v)| (unsafe { std::str::from_utf8_unchecked(k.as_ref()) }, v)));
+    let stats = BTreeMap::from_iter(stats.into_iter().map(|(k, v)| (unsafe { String::from_utf8_unchecked(k) }, v)));
     for (location, MeasurementStats { min, max, sum, count}) in stats.iter() {
         println!(
             "{location}={:.1}/{:.1}/{:.1}",

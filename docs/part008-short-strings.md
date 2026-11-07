@@ -191,9 +191,67 @@ sudo perf stat -o stat-cycles-u.txt -e cycles:u,instructions:u ./target/release/
   scattered over it, so most lookups touch a page the first level of the dTLB doesn't hold. On
   the M4 with 16 KB pages, it's only ~40 pages.
 
-Why Jon saw something else I can't tell: another CPU (x86, with other TLB sizes, another
-branch predictor, and `dTLB-load-misses` mapped to another hardware event, possibly counting
-speculative walks), and other code around it at that moment.
+**With Jon's code, it does happen.** To compare like Jon did, I built his current code
+([`src/jonhoo/main.rs`](../src/jonhoo/main.rs)) twice on the Graviton, with 32 GB of RAM
+(`r7g.xlarge`, so that the 1B file stays in the page cache): once as it is, with `StrVec`, and
+once with only the key changed back to `Vec<u8>` (`HashMap::<Vec<u8>, …>` and
+`.entry(station.to_vec())`). Everything else, including his `split_semi` with
+`u8x64::load_or_default`, is the same in both:
+
+| 1B, per row (Jon's code) | `Vec<u8>` | `StrVec` | Difference |
+|---|---|---|---|
+| **dTLB misses** | **0.004** | **0.102** | **~25×** |
+| Loads through the dTLB | 65.7 | 68.7 | +3 |
+| Branches | 123.5 | 124.5 | +1 |
+| Mispredicted branches | 2.41 | 2.28 | −5 % |
+| Instructions | 401.7 | 408.7 | +7 |
+| Cycles | 228.6 | 226.8 | −0.8 % |
+| Time | 88.6 s | 88.0 s | the same |
+
+- **Jon's observation repeats: ~25× more dTLB misses with `StrVec`.**
+- **It costs no time.** The cycles and the time are the same. A miss in the first level of the
+  dTLB that is found in the second level costs a few cycles, nothing against ~227 cycles per
+  row. A counter that jumps 25× doesn't have to mean a slower program; what each miss costs
+  decides.
+- **The mispredictions didn't go up**, so it isn't the speculative load in `as_ref()` either.
+- **Without `StrVec` there are almost no dTLB misses**: 0.004 per row is about one per 4 KB page
+  of the file (13.8 GB / 4 KB ≈ 3.4 million pages, ~4 million misses). Jon's table with
+  `with_capacity(100_000)` (131,072 buckets, ~5 MB) hardly causes any, while mine had ~0.76 per
+  row. I don't know why yet.
+
+**Where the extra misses are**, with `perf record -e dTLB-load-misses:u` and
+`perf report --sort srcfile,srcline`: 85 % of them (~87 million) at `vector.rs:458` in the
+`StrVec` version, and 56 % (~2.2 million) at the same place without it. `vector.rs` is
+`std::simd`, and the only place Jon's code uses it is `split_semi`, the
+`u8x64::load_or_default(line)` that loads the line. So the extra misses are **not in the
+`StrVec` code**, but in loading the line, which is the same code in both versions and reads
+the same addresses. `perf annotate` shows the same instructions there in both binaries, so it's
+not a different compilation either. What's left is an indirect effect: with `StrVec`, other
+pages are used between two lines (keys inside the buckets, entries of another size), and the
+translation of the file's page gets pushed out of the small first level of the dTLB more often,
+so the next line of the same page misses again. Why exactly, I couldn't find out.
+
+**A side finding that matters more: on ARM, `load_or_default` loads byte by byte.** What the
+compiler made of `u8x64::load_or_default(line)`:
+
+```text
+addp …  /  umov …  /  bfi …  /  orr x8, …   build a 64-bit mask: which bytes belong to the line
+tbz   w8, #0, …                              does byte 0 belong? if not, skip
+ldr   b0, [x27]                              load ONE byte
+tbnz  w8, #1, …                              does byte 1 belong? …
+…                                            and so on for all 64 bytes
+```
+
+ARM (NEON) has no masked load, "load these 64 bytes, but only the allowed ones", which x86 with
+AVX-512 does in one instruction. So the compiler splits it into **up to 64 single-byte loads,
+each behind a conditional branch** on one bit of the mask: dozens of branches per line, the one
+at the end of the line depending on its length, and dozens of one-byte loads instead of one
+16-byte load. The counter agrees: ~66 – 69 loads through the dTLB per row in Jon's code, about
+one per byte of the line. That also explains why my `u8x64` attempt for the `;` in
+[Part 006, change #3](part006-finding-the-end-of-a-line.md#3-an-attempt-finding-the--with-u8x64-slower-not-used)
+was 6× slower than `rsplitn`, and why Jon's version at this point of the stream needs ~227
+cycles per row on the Graviton against ~51 – 57 for mine: my iterator loads whole 64-byte blocks
+with `from_slice` and uses `load_or_default` only once, at the end of the file.
 
 ### 2. Comparing short keys as one `u128` (even slower, not used)
 

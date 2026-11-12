@@ -27,8 +27,12 @@ pub struct MeasurementStats {
 
 impl MeasurementStats {
     pub fn update(&mut self, measurement: i16) {
-        self.min = self.min.min(measurement);
-        self.max = self.max.max(measurement);
+        if measurement < self.min {
+            self.min = measurement;
+        }
+        if measurement > self.max {
+            self.max = measurement;
+        }
         self.sum += i64::from(measurement);
         self.count += 1;
     }

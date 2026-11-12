@@ -208,6 +208,11 @@ from 14.01 s to 9.93 s and from 58.01 to 42.86 billion cycles (−26 %).
 
 ### 5. Where the keys in the `HashMap` point to
 
+On the stream, Jon and the people in the chat worried that keys pointing straight into the
+mapped file would be slower: the names would be spread over many different pages of the
+13.8 GB file, instead of being close together on the heap. Change #3 showed the opposite, the
+keys in the map made the program faster, so I wanted to see why.
+
 Since change #3, every key points to the first line of its station in the mapped file, and the
 helper thread releases every 512 MB block with `MADV_DONTNEED` once the reading has moved past
 it. So I wanted to know how many blocks and pages the 413 keys come from.
@@ -242,7 +247,9 @@ MMap index with number of keys:
 
 - **All 413 keys are in the first 3 pages of the file, 48 KB.** The last new station shows up
   43,361 bytes (2.65 pages) into the 13.8 GB file. Every station is common, so each one
-  appears within the first few thousand lines.
+  appears within the first few thousand lines. That's why the worry from the stream doesn't
+  hold here: a key points to the *first* line of its station, and the first lines of all
+  stations are at the very start of the file.
 - **The map starts exactly at a page boundary.** `0x300000000` divided by 16 KB is 786,432 with
   no remainder, so page 786,432 of the address space is page 0 of the file, and the two tables
   are the same. `mmap` always returns an address aligned to a page; the remainder of 0 is what

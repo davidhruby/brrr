@@ -27,9 +27,9 @@ fn process_data(map: &[u8]) {
     let mut hash_station_infos: HashMap<u64, HashMap<String, HashInfo>> = HashMap::new();
     // FIXME tohle je problem. cely vektor zabere strasne mista. je potreba delat spodni cast postupne misto pouzivani cele pameti
     let hasher = RandomState::new();
-    for (station_bytes, _) in StationTemperatureIterator::new(map) {
-        let station_hash = hasher.hash_one(&station_bytes);
-        let station_name = str::from_utf8(station_bytes).unwrap().to_string();
+    for (station_name, _) in StationTemperatureIterator::new(map) {
+        let station_hash = hasher.hash_one(&station_name.as_bytes());
+        let station_name = str::from_utf8(station_name.as_bytes()).unwrap().to_string();
         hash_station_infos.entry(station_hash)
             .and_modify(|existing_station| {
                 existing_station.entry(station_name.to_string())

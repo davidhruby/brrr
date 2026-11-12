@@ -1,0 +1,26 @@
+Tue Nov 10 14:48:00 CET 2026
+System-wide memory free percentage: 62%
+vm.swapusage: total = 3072.00M  used = 1382.62M  free = 1689.38M  (encrypted)
+Mach Virtual Memory Statistics: (page size of 16384 bytes)
+Pages free:                                   121289.
+Pages active:                                 233000.
+Pages inactive:                               273001.
+Pages speculative:                              5030.
+Pages throttled:                                   0.
+Pages wired down:                             171411.
+Pages purgeable:                               11126.
+"Translation faults":                     2577445429.
+Pages copy-on-write:                        78529450.
+Pages zero filled:                        1552073851.
+Pages reactivated:                         321207426.
+Pages purged:                               52678898.
+File-backed pages:                              8917.
+Anonymous pages:                              502114.
+Pages stored in compressor:                   887755.
+Pages occupied by compressor:                 205207.
+Decompressions:                            320324043.
+Compressions:                              390483123.
+Pageins:                                   286974286.
+Pageouts:                                    1482819.
+Swapins:                                    19338867.
+Swapouts:                                   24695430.

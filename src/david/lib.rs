@@ -449,7 +449,7 @@ fn collisions_fast_hasher() {
 
     // FIXME tohle je problem. cely vektor zabere strasne mista. je potreba delat spodni cast postupne misto pouzivani cele pameti
     let stations = StationTemperatureIterator::new(map)
-        .map(|(station, _)| station)
+        .map(|(station, _)| station.as_bytes())
         .collect::<Vec<&[u8]>>();
 
     // FIXME => mam napad ze kdyz zvednu slots tak bude mene kolizi (nejlepe zadne) a pak to bude super rychle jen to musi vlezt do SIMD

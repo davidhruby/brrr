@@ -24,6 +24,7 @@ Each part covers one step of the video and can span several days. It records:
 | 007  | 2026-11-05 – 2026-11-05   | [In progress](part007-hashing.md) | [`part007`](https://github.com/davidhruby/brrr/tree/part007) |
 | 008  | 2026-11-06 – 2026-11-06   | [In progress](part008-short-strings.md) | [`part008`](https://github.com/davidhruby/brrr/tree/part008) |
 | 009  | 2026-11-07 – 2026-11-08   | [In progress](part009-masked-loads-and-dtlb-misses.md) | [`part009`](https://github.com/davidhruby/brrr/tree/part009) |
+| 010  | 2026-11-08 – 2026-11-10   | [In progress](part010-build-settings-and-simd-name-comparison.md) | [`part010`](https://github.com/davidhruby/brrr/tree/part010) |
 
 Every part has a git tag with the code as it was at the end of that part. To see it:
 

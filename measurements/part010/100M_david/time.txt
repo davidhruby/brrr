@@ -1,0 +1,23 @@
+
+thread 'main' (16598961) panicked at src/david/main.rs:420:36:
+slice index starts at 790 but ends at 789
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+time: command terminated abnormally
+        0.73 real         0.00 user         0.03 sys
+           530595840  maximum resident set size
+                   0  average shared memory size
+                   0  average unshared data size
+                   0  average unshared stack size
+                 809  page reclaims
+               32260  page faults
+                   0  swaps
+                   0  block input operations
+                   0  block output operations
+                   0  messages sent
+                   0  messages received
+                   0  signals received
+                   0  voluntary context switches
+                 527  involuntary context switches
+            17090493  instructions retired
+            10792253  cycles elapsed
+             1524048  peak memory footprint

@@ -295,3 +295,33 @@ like the end of a loop; ↓ forward).
   map to lines only roughly.
 - `#[inline(never)]` keeps a small function visible in the profile as its own entry, but
   remove it before measuring speed, because it stops the compiler from inlining it.
+
+## A stable clock on Linux (for bare metal)
+
+Linux changes the CPU clock with the load, by a rule called the *governor*. `powersave` or
+`schedutil` keep the clock low when idle and raise it step by step under load, so the first
+milliseconds of a run are slower. `performance` keeps it at the maximum all the time:
+
+```sh
+cat /sys/devices/system/cpu/cpu0/cpufreq/scaling_governor
+cpupower frequency-info
+sudo cpupower frequency-set -g performance
+```
+
+- **It matters on a physical machine,** for short runs and micro-benchmarks most. A run of 10 –
+  60 s on 1B hardly notices the ramp-up, which takes milliseconds.
+- **On a normal AWS instance there's nothing to set.** The hypervisor controls the clock; the
+  virtual machine usually has no cpufreq driver (`scaling_governor` doesn't exist, `cpupower`
+  reports no or an unknown driver). AWS allows it only on some bigger instance types and on
+  `metal`. The clocks I measured there (from `cycles` / user time) were already at the
+  maximum: ~3.37 GHz on Sapphire Rapids, ~4.5 GHz on Zen 5. A run at ~4.25 GHz on Zen 5 came
+  from the host, which the governor inside the VM can't change.
+- **Turbo makes the clock move too**: it depends on the temperature and on how many cores are
+  busy. For comparable numbers on bare metal, it's often turned off, so the clock stays at the
+  base frequency. How depends on the driver: `intel_pstate` on Intel
+  (`echo 1 | sudo tee /sys/devices/system/cpu/intel_pstate/no_turbo`), the `boost` file with
+  `acpi-cpufreq` or `amd-pstate` (`echo 0 | sudo tee /sys/devices/system/cpu/cpufreq/boost`).
+- **Either way, compare cycles, not seconds.** Instructions per row don't depend on the clock
+  at all, cycles per row much less than the seconds (only the waiting for memory, which takes
+  the same nanoseconds at any clock, turns into more cycles at a higher one).
+- On macOS none of this can be set; the system controls the clock.

@@ -23,6 +23,10 @@ path = "src/analyze/tlb_size/main.rs"
 name = "analyze-collision"
 path = "src/analyze/collision/main.rs"
 
+[[bin]]
+name = "analyze-station-names"
+path = "src/analyze/station_name/main.rs"
+
 [lib]
 name = "brrr"
 path = "src/david/lib.rs"
@@ -30,6 +34,8 @@ path = "src/david/lib.rs"
 [profile.release]
 lto = "fat"
 debug = "full"
+codegen-units = 1
+panic = "abort"
 
 [dependencies]
 quick-xml = { version = "0.42.0", features = ["serialize", "overlapped-lists"] }

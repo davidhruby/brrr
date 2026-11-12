@@ -5,10 +5,11 @@ use std::{env, thread};
 use std::collections::{BTreeMap, HashMap};
 use std::ffi::c_void;
 use std::fs::File;
-use std::hash::{BuildHasher, Hasher};
+use std::hash::{BuildHasher, Hash, Hasher};
 use std::os::fd::AsRawFd;
-use std::simd::u8x64;
+use std::simd::{u8x16, u8x64};
 use std::simd::prelude::SimdPartialEq;
+use std::simd::cmp::SimdPartialOrd;
 use std::sync::mpsc;
 use std::sync::mpsc::Sender;
 
@@ -385,7 +386,7 @@ impl <'a> StationTemperatureIterator<'a> {
 //TODO this code works with full pairs in the SIMD only so it can be optimized
 // for example delimiter in first simd and newline in another simd
 impl <'a> Iterator for StationTemperatureIterator<'a> {
-    type Item = (&'a [u8], &'a [u8]);
+    type Item = (StationName<'a>, &'a [u8]);
 
     fn next(&mut self) -> Option<Self::Item> {
         const SIZE_64: usize = 64;
@@ -415,9 +416,10 @@ impl <'a> Iterator for StationTemperatureIterator<'a> {
         let newline_index = self.newline_bit_mask.trailing_zeros() as usize;
         self.newline_bit_mask &= self.newline_bit_mask - 1;
         let station = &self.map[self.at..self.block_start + delimiter_index];
+        let station_name = StationName{ rest: &self.map[self.at..], len: station.len()};
         let temperature = &self.map[self.block_start + delimiter_index + 1..self.block_start + newline_index];
         self.at = self.block_start + newline_index + 1;
-        Some((station, temperature))
+        Some((station_name, temperature))
     }
 }
 
@@ -433,7 +435,7 @@ mod station_temperature_iterator_tests {
         assert_eq!(next_opt.is_some(), true);
 
         let next = next_opt.unwrap();
-        assert_eq!(next.0, b"Chihuahua");
+        assert_eq!(next.0.as_bytes()  , b"Chihuahua");
         assert_eq!(next.1, b"16.7");
 
         let next_opt = iterator.next();
@@ -448,61 +450,61 @@ mod station_temperature_iterator_tests {
         let mut next_opt = iterator.next();
         assert_eq!(next_opt.is_some(), true);
         let mut next = next_opt.unwrap();
-        assert_eq!(next.0, b"Chihuahua");
+        assert_eq!(next.0.as_bytes(), b"Chihuahua");
         assert_eq!(next.1, b"16.7");
 
         next_opt = iterator.next();
         assert_eq!(next_opt.is_some(), true);
         next = next_opt.unwrap();
-        assert_eq!(next.0, b"Bata");
+        assert_eq!(next.0.as_bytes(), b"Bata");
         assert_eq!(next.1, b"15.0");
 
         next_opt = iterator.next();
         assert_eq!(next_opt.is_some(), true);
         next = next_opt.unwrap();
-        assert_eq!(next.0, b"Durban");
+        assert_eq!(next.0.as_bytes(), b"Durban");
         assert_eq!(next.1, b"12.2");
 
         next_opt = iterator.next();
         assert_eq!(next_opt.is_some(), true);
         next = next_opt.unwrap();
-        assert_eq!(next.0, b"Vientiane");
+        assert_eq!(next.0.as_bytes(), b"Vientiane");
         assert_eq!(next.1, b"13.9");
 
         next_opt = iterator.next();
         assert_eq!(next_opt.is_some(), true);
         next = next_opt.unwrap();
-        assert_eq!(next.0, b"Karachi");
+        assert_eq!(next.0.as_bytes(), b"Karachi");
         assert_eq!(next.1, b"12.6");
 
         next_opt = iterator.next();
         assert_eq!(next_opt.is_some(), true);
         next = next_opt.unwrap();
-        assert_eq!(next.0, b"Durban");
+        assert_eq!(next.0.as_bytes(), b"Durban");
         assert_eq!(next.1, b"13.4");
 
         next_opt = iterator.next();
         assert_eq!(next_opt.is_some(), true);
         next = next_opt.unwrap();
-        assert_eq!(next.0, b"Launceston");
+        assert_eq!(next.0.as_bytes(), b"Launceston");
         assert_eq!(next.1, b"-3.4");
 
         next_opt = iterator.next();
         assert_eq!(next_opt.is_some(), true);
         next = next_opt.unwrap();
-        assert_eq!(next.0, b"Bishkek");
+        assert_eq!(next.0.as_bytes(), b"Bishkek");
         assert_eq!(next.1, b"15.9");
 
         next_opt = iterator.next();
         assert_eq!(next_opt.is_some(), true);
         next = next_opt.unwrap();
-        assert_eq!(next.0, b"Kuwait City");
+        assert_eq!(next.0.as_bytes(), b"Kuwait City");
         assert_eq!(next.1, b"39.3");
 
         next_opt = iterator.next();
         assert_eq!(next_opt.is_some(), true);
         next = next_opt.unwrap();
-        assert_eq!(next.0, b"Valletta");
+        assert_eq!(next.0.as_bytes(), b"Valletta");
         assert_eq!(next.1, b"18.9");
 
         next_opt = iterator.next();
@@ -574,6 +576,57 @@ impl Hasher for IdealHasher {
     }
 }
 
+impl Hash for StationName<'_> {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.rest[..self.len].hash(state);
+    }
+}
+
+#[derive(Clone, Copy)]
+pub struct StationName<'a> {
+    pub rest: &'a [u8],
+    pub len: usize,
+}
+
+impl<'a> StationName<'a> {
+    pub fn as_bytes(&self) -> &'a [u8] {
+        &self.rest[..self.len]
+    }
+}
+
+
+const fn indices<const N: usize>() -> [u8; N] {
+    let mut indicies = [0u8; N];
+    let mut i = 0;
+    while i < N {
+        indicies[i] = i as u8;
+        i += 1;
+    }
+    indicies
+}
+
+const SIMD_INDICES_16: u8x16 = u8x16::from_array(indices::<16usize>());
+impl PartialEq for StationName<'_> {
+    fn eq(&self, other: &Self) -> bool {
+        if self.len != other.len {
+            false
+        } else {
+            if self.len <= 16 && self.rest.len() >= 16 && other.rest.len() >= 16 {
+                let indices = u8x16::splat(self.len as u8);
+                let valid = SIMD_INDICES_16.simd_lt(indices);
+                let a = u8x16::from_slice(self.rest);
+                let b = u8x16::from_slice(other.rest);
+                let equal = a.simd_eq(b);
+                (equal | !valid).all()
+            } else {
+                self.rest[..self.len] == other.rest[..other.len]
+            }
+        }
+    }
+}
+
+impl Eq for StationName<'_> {}
+
 fn main() {
     let args: Vec<String> = env::args().collect();
     let input_file_path = &args[1];
@@ -595,21 +648,22 @@ fn main() {
     let mut next_block_pre_load_info = NextBlockPreLoadInfo::new(map.as_ptr(), file_len, M_ADVISE_SIZE);
     next_block_pre_load_info.request_first_block_load(&tx);
 
-    let mut stats: HashMap<Vec<u8>, MeasurementStats, IdealHasherBuilder> = HashMap::with_capacity_and_hasher(10_000, IdealHasherBuilder);
+    let mut stats: HashMap<StationName, MeasurementStats, IdealHasherBuilder> = HashMap::with_capacity_and_hasher(10_000, IdealHasherBuilder);
     for (station, temperature) in StationTemperatureIterator::new(map) {
         // trigger next block preload into RAM if needed
-        next_block_pre_load_info.request_next_block_load(&tx, station.as_ptr());
+        next_block_pre_load_info.request_next_block_load(&tx, station.rest.as_ptr());
 
         let t = parse_temperature(temperature);
 
-        let stat = match stats.get_mut(station) {
+        let stat = match stats.get_mut(&station) {
             Some(stat) => stat,
-            None => stats.entry(station.to_vec()).or_insert(MeasurementStats::default())
+            None => stats.entry(station).or_insert(MeasurementStats::default())
         };
         stat.update(t);
     }
 
-    let stats = BTreeMap::from_iter(stats.into_iter().map(|(k, v)| (unsafe { String::from_utf8_unchecked(k) }, v)));
+    let stats = BTreeMap::from_iter(stats.into_iter()
+        .map(|(k, v)| (unsafe { std::str::from_utf8_unchecked(&k.rest[..k.len]) }, v)));
     for (location, MeasurementStats { min, max, sum, count}) in stats.iter() {
         println!(
             "{location}={:.1}/{:.1}/{:.1}",

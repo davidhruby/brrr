@@ -20,11 +20,11 @@ cp input/100M_measurements.txt /Volumes/RAMDisk/
 
 cargo build --release
 
-scripts/measure.sh david 100M part008
+scripts/measure.sh david 100M part010-PartialEq_u8x16
 
 hdiutil detach /Volumes/RAMDisk
 
-scripts/measure.sh david 1B part008
+scripts/measure.sh david 1B part010-PartialEq_u8x16
 ```
 
 on the linux machine with enough RAM:

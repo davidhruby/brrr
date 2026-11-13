@@ -435,37 +435,37 @@ impl Hasher for FastHasher {
     }
 }
 
-#[test]
-fn collisions_fast_hasher() {
-    use std::collections::{HashMap, HashSet};
-    use std::hash::BuildHasher;
-    use std::fs::File;
-    use crate::app::{MMapHelper, StationTemperatureIterator};
-
-    let file = File::open("input/1B_measurements.txt").unwrap();
-    let file_len: usize = file.metadata().unwrap().len() as usize;
-    let m_m_helper = MMapHelper::new(&file, file_len);
-    let map = m_m_helper.as_slice();
-
-    // FIXME tohle je problem. cely vektor zabere strasne mista. je potreba delat spodni cast postupne misto pouzivani cele pameti
-    let stations = StationTemperatureIterator::new(map)
-        .map(|(station, _)| station.as_bytes())
-        .collect::<Vec<&[u8]>>();
-
-    // FIXME => mam napad ze kdyz zvednu slots tak bude mene kolizi (nejlepe zadne) a pak to bude super rychle jen to musi vlezt do SIMD
-    // FIXME => tohle chces hlavne udelat pro klasickou HashMap => tady zacit!
-    // with_capacity(10_000) gives 16_384 slots (a power of two)
-    let slots = 16_384u64;
-    let hashes: Vec<u64> = stations.iter().map(|name| FastHasherBuilder.hash_one(name)).collect();
-
-    let distinct = |f: &dyn Fn(u64) -> u64| hashes.iter().map(|&h| f(h)).collect::<HashSet<_>>().len();
-    println!("names:            {}", stations.len());
-    println!("distinct hashes:  {}", distinct(&|h| h));
-    println!("distinct slots:   {}", distinct(&|h| h & (slots - 1)));
-    println!("distinct tags:    {} of 128", distinct(&|h| h >> 57));
-
-    // the biggest group of names with the same hash
-    let mut groups: HashMap<u64, usize> = HashMap::new();
-    for &h in &hashes { *groups.entry(h).or_default() += 1; }
-    println!("largest group:    {}", groups.values().max().unwrap());
-}
+// #[test]
+// fn collisions_fast_hasher() {
+//     use std::collections::{HashMap, HashSet};
+//     use std::hash::BuildHasher;
+//     use std::fs::File;
+//     use crate::app::{MMapHelper, StationTemperatureIterator};
+//
+//     let file = File::open("input/1B_measurements.txt").unwrap();
+//     let file_len: usize = file.metadata().unwrap().len() as usize;
+//     // let m_m_helper = MMapHelper::new(&file, file_len);
+//     // let map = m_m_helper.as_slice();
+//
+//     // FIXME tohle je problem. cely vektor zabere strasne mista. je potreba delat spodni cast postupne misto pouzivani cele pameti
+//     let stations = StationTemperatureIterator::new(map)
+//         .map(|(station, _)| station.as_bytes())
+//         .collect::<Vec<&[u8]>>();
+//
+//     // FIXME => mam napad ze kdyz zvednu slots tak bude mene kolizi (nejlepe zadne) a pak to bude super rychle jen to musi vlezt do SIMD
+//     // FIXME => tohle chces hlavne udelat pro klasickou HashMap => tady zacit!
+//     // with_capacity(10_000) gives 16_384 slots (a power of two)
+//     let slots = 16_384u64;
+//     let hashes: Vec<u64> = stations.iter().map(|name| FastHasherBuilder.hash_one(name)).collect();
+//
+//     let distinct = |f: &dyn Fn(u64) -> u64| hashes.iter().map(|&h| f(h)).collect::<HashSet<_>>().len();
+//     println!("names:            {}", stations.len());
+//     println!("distinct hashes:  {}", distinct(&|h| h));
+//     println!("distinct slots:   {}", distinct(&|h| h & (slots - 1)));
+//     println!("distinct tags:    {} of 128", distinct(&|h| h >> 57));
+//
+//     // the biggest group of names with the same hash
+//     let mut groups: HashMap<u64, usize> = HashMap::new();
+//     for &h in &hashes { *groups.entry(h).or_default() += 1; }
+//     println!("largest group:    {}", groups.values().max().unwrap());
+// }

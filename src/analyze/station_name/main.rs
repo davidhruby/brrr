@@ -1,7 +1,8 @@
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fs::File;
 use std::io::BufRead;
-use brrr::app::{IdealHasherBuilder, MMapHelper, MeasurementStats, StationName, StationTemperatureIterator};
+use std::os::fd::AsRawFd;
+use brrr::app::{IdealHasherBuilder, MeasurementStats, StationName, StationTemperatureIterator};
 
 const KB: usize = 1024;
 const MACOS_PAGE_SIZE: usize = 16 * KB;
@@ -16,13 +17,31 @@ fn main() {
 
     let file = File::open("input/1B_measurements.txt").unwrap();
     let file_len: usize = file.metadata().unwrap().len() as usize;
-    let m_m_helper = MMapHelper::new(&file, file_len);
-    let map = m_m_helper.as_slice();
+
+    let m_map_ptr = unsafe {
+        let ptr = libc::mmap(
+            std::ptr::null_mut(),
+            file_len as libc::size_t,
+            libc::PROT_READ,
+            libc::MAP_SHARED,
+            file.as_raw_fd(),
+            0,
+        );
+        if ptr == libc::MAP_FAILED {
+            panic!("mmap failed: {:?}", std::io::Error::last_os_error());
+        } else {
+            ptr
+        }
+    };
+    if unsafe { libc::madvise(m_map_ptr, file_len as libc::size_t, libc::MADV_WILLNEED) } != 0 {
+        panic!("madvise MADV_WILLNEED failed: {:?}", std::io::Error::last_os_error());
+    }
+    let m_map = unsafe { std::slice::from_raw_parts(m_map_ptr as *const u8, file_len) };
 
     let mut stats: HashMap<StationName, MeasurementStats, IdealHasherBuilder> = HashMap::with_capacity_and_hasher(10_000, IdealHasherBuilder);
-    let first_station_name_pointer = map.as_ptr();
+    let first_station_name_pointer = m_map_ptr;
     let mut last_station_name_pointer = None;
-    for (station, _) in StationTemperatureIterator::new(map) {
+    for (station, _) in StationTemperatureIterator::new(m_map) {
         let station_name = unsafe { std::str::from_utf8_unchecked(&station.rest[..station.len]) };
         station_names.remove(station_name);
         if last_station_name_pointer.is_none() && station_names.is_empty() {
@@ -54,7 +73,7 @@ fn main() {
             .and_modify(|count| *count += 1)
             .or_insert(1);
 
-        let m_map_index = unsafe { key.as_bytes().as_ptr().offset_from_unsigned(map.as_ptr()) };
+        let m_map_index = unsafe { key.as_bytes().as_ptr().offset_from_unsigned(m_map_ptr as *const u8) };
         let m_map_page = m_map_index / MACOS_PAGE_SIZE;
         m_map_page_index_block_count.entry(m_map_page)
             .and_modify(|count| *count += 1)

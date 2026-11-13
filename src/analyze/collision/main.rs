@@ -216,7 +216,6 @@ fn analyse_fast_hash_map_collisions() {
 
 #[cfg(test)]
 mod tests {
-    use std::hash::RandomState;
     use crate::process_data;
 
     #[test]

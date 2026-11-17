@@ -532,11 +532,13 @@ struct StationTable<'a> {
 impl <'a> StationTable<'a> {
     fn new() -> Self {
         Self {
+            // this way it's not created on stack before boxing
             slots: (0..SLOTS).map(|_| Slot::default())
                 .collect::<Vec<_>>()
                 .into_boxed_slice()
                 .try_into()
                 .unwrap(),
+            // this way it's not created on stack before boxing
             names: (0..SLOTS).map(|_| &[][..])
                 .collect::<Vec<_>>()
                 .into_boxed_slice()

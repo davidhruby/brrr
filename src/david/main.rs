@@ -2,7 +2,7 @@
 
 // this challenge has a rule that all code has to be in one file
 use std::{env, thread};
-use std::collections::{BTreeMap, HashMap};
+use std::collections::BTreeMap;
 use std::fs::File;
 use std::hash::{BuildHasher, Hash, Hasher};
 use std::os::fd::AsRawFd;
@@ -11,6 +11,7 @@ use std::simd::prelude::SimdPartialEq;
 use std::simd::cmp::SimdPartialOrd;
 use std::sync::mpsc;
 
+#[derive(Debug)]
 pub struct MeasurementStats {
     min: i16,
     max: i16,
@@ -347,18 +348,25 @@ impl PartialEq for StationName<'_> {
 
 impl Eq for StationName<'_> {}
 
-fn one(map: &[u8]) -> HashMap<StationName<'_>, MeasurementStats, IdealHasherBuilder> {
-    let mut stats: HashMap<StationName, MeasurementStats, IdealHasherBuilder> = HashMap::with_capacity_and_hasher(1_000, IdealHasherBuilder);
+#[allow(dead_code)]
+fn one_upper_bound(map: &[u8]) -> [MeasurementStats; 128] {
+    let mut stats_array: [MeasurementStats; 128] = std::array::from_fn(|_| MeasurementStats::default());
     for (station, temperature) in StationTemperatureIterator::new(map) {
         let t = parse_temperature(temperature);
-
-        let stat = match stats.get_mut(&station) {
-            Some(stat) => stat,
-            None => stats.entry(station).or_insert(MeasurementStats::default())
-        };
-        stat.update(t);
+        let measurement_stats = &mut stats_array[station.len];
+        measurement_stats.update(t);
     }
-    stats
+    stats_array
+}
+
+#[inline(always)]
+fn one(map: &[u8]) -> Vec<(&[u8], MeasurementStats)> {
+    let mut stats = StationTable::new();
+    for (station, temperature) in StationTemperatureIterator::new(map) {
+        let t = parse_temperature(temperature);
+        stats.get_mut(station).update(t);
+    }
+    stats.into_entries()
 }
 
 fn find_new_line(bytes: &[u8]) -> Option<usize> {
@@ -382,6 +390,298 @@ fn find_new_line(bytes: &[u8]) -> Option<usize> {
     }
     // fewer than 8 bytes left, only at the end of the file
     bytes[i..].iter().position(|&b| b == b'\n').map(|position| i + position)
+}
+
+const SLOT_BITS: usize = 14;
+//14 => 16_384 so it will cover the max 10K station names from 1BRC rules
+const SLOTS: usize = 1 << SLOT_BITS;
+const SLOT_MASK: usize = SLOTS - 1;
+
+fn key_words(station: &StationName) -> (u64, u64) {
+    if station.rest.len() < 16 {
+        let mut station_name_with_zeros = [0u8; 16];
+        station_name_with_zeros[..station.len].copy_from_slice(&station.rest[..station.len]);
+        let station_first_16_bytes = u128::from_le_bytes(station_name_with_zeros);
+        let word_1 = station_first_16_bytes as u64;
+        let word_2 = (station_first_16_bytes >> 64) as u64;
+        (word_1, word_2)
+    } else {
+        let mask = u128::MAX >> (128 - (8 * station.len.min(16)));
+        let station_first_16_bytes = u128::from_le_bytes(station.rest[..16].try_into().unwrap());
+        let masked_station = station_first_16_bytes & mask;
+        let word_1 = masked_station as u64;
+        let word_2 = (masked_station >> 64) as u64;
+        (word_1, word_2)
+    }
+}
+
+#[cfg(test)]
+mod key_words_tests {
+    use super::{key_words, StationName};
+
+    #[test]
+    fn name_of_4_bytes() {
+        let data = b"Bata;15.0\nDurban;12.2\n";
+        let station = StationName { rest: &data[..], len: 4 };
+        let (word1, word2) = key_words(&station);
+        assert_eq!(word1, u64::from_le_bytes(*b"Bata\0\0\0\0"));
+        assert_eq!(word2, 0);
+    }
+
+    #[test]
+    fn name_of_11_bytes() {
+        let data = b"Kuwait City;39.3\nBata;15.0\n";
+        let station = StationName { rest: &data[..], len: 11 };
+        let (word1, word2) = key_words(&station);
+        assert_eq!(word1, u64::from_le_bytes(*b"Kuwait C"));
+        assert_eq!(word2, u64::from_le_bytes(*b"ity\0\0\0\0\0"));
+    }
+
+    #[test]
+    fn name_of_16_bytes() {
+        let data = b"Petropavlovsk-Ka;1.2\nBata;15.0\n";
+        let station = StationName { rest: &data[..], len: 16 };
+        let (word1, word2) = key_words(&station);
+        assert_eq!(word1, u64::from_le_bytes(*b"Petropav"));
+        assert_eq!(word2, u64::from_le_bytes(*b"lovsk-Ka"));
+    }
+
+    #[test]
+    fn name_of_24_bytes() {
+        let data = b"Petropavlovsk-Kamchatsky;1.2\nBata;15.0\n";
+        let station = StationName { rest: &data[..], len: 24 };
+        let (word1, word2) = key_words(&station);
+        assert_eq!(word1, u64::from_le_bytes(*b"Petropav"));
+        assert_eq!(word2, u64::from_le_bytes(*b"lovsk-Ka"));
+    }
+
+    #[test]
+    fn name_end_chunk() {
+        let data = b"Bata;15.0\n";
+        let station = StationName { rest: &data[..], len: 4 };
+        let (word1, word2) = key_words(&station);
+        assert_eq!(word1, u64::from_le_bytes(*b"Bata\0\0\0\0"));
+        assert_eq!(word2, 0);
+    }
+}
+
+fn hash(word_1: u64, word_2: u64) -> usize {
+    // reduce overlapping by rotating second word
+    let words = word_1 ^ word_2.rotate_left(29u32);
+    let multiplied_by_magic_constant = words.wrapping_mul(0x243F_6A88_85A3_08D3 as u64);
+    //reduce to numbers from 0 to 2_047
+    (multiplied_by_magic_constant as usize) >> (64 - SLOT_BITS)
+}
+
+#[cfg(test)]
+mod hash_tests {
+    use super::*;
+
+    #[test]
+    fn test_hash() {
+        assert!(hash(0, 0) < SLOTS);
+        assert!(hash(u64::MAX, u64::MAX) < SLOTS);
+        assert!(hash(u64::MAX, 0) < SLOTS);
+    }
+}
+
+#[cfg(test)]
+mod keys_with_hash_test {
+    use super::*;
+
+    #[test]
+    fn test_hash() {
+        let hash_1 = {
+            let data = b"Bata;15.0\nDurban;12.2\n";
+            let station = StationName { rest: &data[..], len: 4 };
+            let (word1, word2) = key_words(&station);
+            hash(word1, word2)
+        };
+        let hash_2 = {
+            let data = b"Bata;17.0\n";
+            let station = StationName { rest: &data[..], len: 4 };
+            let (word1, word2) = key_words(&station);
+            hash(word1, word2)
+        };
+        assert_eq!(hash_1, hash_2);
+    }
+}
+
+#[derive(Debug)]
+struct Slot {
+    word_1: u64,
+    word_2: u64,
+    stats: MeasurementStats,
+}
+
+impl Default for Slot {
+    fn default() -> Self {
+        Self {
+            word_1: 0,
+            word_2: 0,
+            stats: MeasurementStats::default(),
+        }
+    }
+}
+
+struct StationTable<'a> {
+    slots: Box<[Slot; SLOTS]>,
+    names: Box<[&'a [u8]; SLOTS]>,
+}
+
+impl <'a> StationTable<'a> {
+    fn new() -> Self {
+        Self {
+            slots: (0..SLOTS).map(|_| Slot::default())
+                .collect::<Vec<_>>()
+                .into_boxed_slice()
+                .try_into()
+                .unwrap(),
+            names: (0..SLOTS).map(|_| &[][..])
+                .collect::<Vec<_>>()
+                .into_boxed_slice()
+                .try_into()
+                .unwrap(),
+        }
+    }
+
+    #[inline(always)]
+    fn get_mut(&mut self, station_name: StationName<'a>) -> &mut MeasurementStats {
+        let (word_1, word_2) = key_words(&station_name);
+        let mut index = hash(word_1, word_2);
+        loop {
+            if self.slots[index].word_1 == 0 {
+                self.slots[index].word_1 = word_1;
+                self.slots[index].word_2 = word_2;
+                self.names[index] = station_name.as_bytes();
+                return &mut self.slots[index].stats;
+            } else if self.slots[index].word_1 == word_1
+                && self.slots[index].word_2 == word_2
+                && (station_name.len < 16 || self.names[index] == station_name.as_bytes()) {
+                return &mut self.slots[index].stats;
+            } else {
+                index = (index + 1) & SLOT_MASK;
+            }
+        }
+    }
+
+    fn into_entries(self) -> Vec<(&'a [u8], MeasurementStats)> {
+        self.names.into_iter().zip(self.slots)
+            .filter(|(_, slot) | slot.word_1 != 0)
+            .map(|(name, slot)| (name, slot.stats))
+            .collect()
+    }
+}
+
+#[cfg(test)]
+mod station_table_tests {
+    use super::*;
+
+    #[test]
+    fn into_entries_empty_test() {
+        let table = StationTable::new();
+        assert!(table.into_entries().is_empty());
+    }
+
+    #[test]
+    fn new_test() {
+        let station_table = StationTable::new();
+        assert_eq!(station_table.slots.len(), SLOTS);
+        assert_eq!(station_table.names.len(), SLOTS);
+        assert!(station_table.slots.iter().all(|s| s.word_1 == 0));
+    }
+
+    #[test]
+    fn get_mut_test() {
+        let mut station_table = StationTable::new();
+        let station_name = StationName { rest: b"Kuwait City;1.0\n", len: 11 };
+        let stats = station_table.get_mut(station_name);
+        assert_eq!(stats.min, i16::MAX);
+        assert_eq!(stats.max, i16::MIN);
+        assert_eq!(stats.sum, 0);
+        assert_eq!(stats.count, 0);
+
+        stats.min = 1;
+        stats.max = 2;
+        stats.sum = 3;
+        stats.count = 4;
+
+        let station_name = StationName { rest: b"Kuwait City;2.0\n", len: 11 };
+        let stats = station_table.get_mut(station_name);
+        assert_eq!(stats.min, 1);
+        assert_eq!(stats.max, 2);
+        assert_eq!(stats.sum, 3);
+        assert_eq!(stats.count, 4);
+    }
+
+    #[test]
+    fn into_entries_test() {
+        let mut station_table = StationTable::new();
+        let station_name = StationName { rest: b"Kuwait City;1.0\n", len: 11 };
+        let stats = station_table.get_mut(station_name);
+        stats.count = 1;
+
+        let station_name = StationName { rest: b"Petropavlovsk-Kamchatsky;2.0\n", len: 24 };
+        let stats = station_table.get_mut(station_name);
+        stats.count = 2;
+
+        let mut entries = station_table.into_entries();
+        entries.sort_by(|a, b| a.0.cmp(b.0));
+        assert_eq!(entries.len(), 2);
+        assert_eq!(entries[0].0, b"Kuwait City");
+        assert_eq!(entries[0].1.count, 1);
+        assert_eq!(entries[1].0, b"Petropavlovsk-Kamchatsky");
+        assert_eq!(entries[1].1.count, 2);
+    }
+
+    #[test]
+    fn into_entries_two_same_stations_test() {
+        let mut station_table = StationTable::new();
+        let station_name = StationName { rest: b"Kuwait City;1.0\n", len: 11 };
+        let stats = station_table.get_mut(station_name);
+        stats.count = 1;
+
+        let station_name = StationName { rest: b"Kuwait City;2.0\n", len: 11 };
+        let stats = station_table.get_mut(station_name);
+        stats.count = 2;
+
+        let mut entries = station_table.into_entries();
+        entries.sort_by(|a, b| a.0.cmp(b.0));
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].0, b"Kuwait City");
+        assert_eq!(entries[0].1.count, 2);
+    }
+
+    #[test]
+    fn get_mut_same_prefix_test() {
+        let mut station_table = StationTable::new();
+        let station_name = StationName { rest: b"Petropavlovsk-Kamchatsky;1.0\n", len: 24 };
+        let stats = station_table.get_mut(station_name);
+        assert_eq!(stats.min, i16::MAX);
+        assert_eq!(stats.max, i16::MIN);
+        assert_eq!(stats.sum, 0);
+        assert_eq!(stats.count, 0);
+
+        stats.min = 1;
+        stats.max = 2;
+        stats.sum = 3;
+        stats.count = 4;
+
+        let station_name = StationName { rest: b"Petropavlovsk-Ka ;2.0\n", len: 16 };
+        let stats = station_table.get_mut(station_name);
+        assert_eq!(stats.min, i16::MAX);
+        assert_eq!(stats.max, i16::MIN);
+        assert_eq!(stats.sum, 0);
+        assert_eq!(stats.count, 0);
+
+        let mut entries = station_table.into_entries();
+        entries.sort_by(|a, b| a.0.cmp(b.0));
+        assert_eq!(entries.len(), 2);
+        assert_eq!(entries[0].0, b"Petropavlovsk-Ka");
+        assert_eq!(entries[0].1.count, 0);
+        assert_eq!(entries[1].0, b"Petropavlovsk-Kamchatsky");
+        assert_eq!(entries[1].1.count, 4);
+    }
 }
 
 fn main() {
@@ -437,26 +737,22 @@ fn main() {
         }
         drop(tx);
 
-        let mut stats: HashMap<StationName, MeasurementStats, IdealHasherBuilder> = HashMap::with_capacity_and_hasher(10_000, IdealHasherBuilder);
+        let mut stats_map = BTreeMap::<&[u8], MeasurementStats>::new();
         for one_stats in rx {
-            for (station_name, measurement) in one_stats {
-                let stat = match stats.get_mut(&station_name) {
-                    Some(stat) => stat,
-                    None => stats.entry(station_name).or_insert(MeasurementStats::default())
-                };
-                stat.update_stats(&measurement);
+            for (station_name, measurement_stats) in one_stats {
+                let ms = stats_map.entry(station_name).or_default();
+                ms.update_stats(&measurement_stats);
             }
         }
 
-        let stats = BTreeMap::from_iter(stats.into_iter()
-            .map(|(k, v)| (unsafe { std::str::from_utf8_unchecked(&k.rest[..k.len]) }, v)));
-        for (location, MeasurementStats { min, max, sum, count}) in stats.iter() {
+        for (station_name, measurement_stats) in stats_map.iter() {
             println!(
-                "{location}={:.1}/{:.1}/{:.1}",
-                (*min as f64) / 10.,
-                (*sum as f64) / 10. / (*count as f64),
-                (*max as f64) / 10.
-            );
+                        "{}={:.1}/{:.1}/{:.1}",
+                        std::str::from_utf8(station_name).unwrap(),
+                        (measurement_stats.min as f64) / 10.,
+                        (measurement_stats.sum as f64) / 10. / (measurement_stats.count as f64),
+                        (measurement_stats.max as f64) / 10.
+                    );
         }
     });
 }

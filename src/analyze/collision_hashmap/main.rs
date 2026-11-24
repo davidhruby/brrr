@@ -66,7 +66,7 @@ fn process_data(map: &[u8]) {
         .filter(|&hash_info| hash_info.len() > 1)
         .collect::<Vec<&HashMap<String, HashInfo>>>();
     if hash_info_vec.is_empty() {
-        println!("no collision data found");
+        println!("no collision_hashmap data found");
     } else {
         hash_info_vec.sort_by(|a, b| a.len().cmp(&b.len()));
         for hash_infos in hash_info_vec {

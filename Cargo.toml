@@ -20,8 +20,12 @@ name = "analyze-tlb-size"
 path = "src/analyze/tlb_size/main.rs"
 
 [[bin]]
-name = "analyze-collision"
-path = "src/analyze/collision/main.rs"
+name = "analyze-collision-hashmap"
+path = "src/analyze/collision_hashmap/main.rs"
+
+[[bin]]
+name = "analyze-collision-hashtable"
+path = "src/analyze/collision_hashtable/main.rs"
 
 [[bin]]
 name = "analyze-station-names"

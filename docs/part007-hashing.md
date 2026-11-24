@@ -201,7 +201,7 @@ the number of different names minus the number of different hashes. The hash of 
 gave **413 − 344 = 69** names that share their hash with another one, in groups of up to 5.
 SipHash gives 0.
 
-**A small tool,** [`src/analyze/collision/main.rs`](../src/analyze/collision/main.rs)
+**A small tool,** [`../src/analyze/collision_hashmap/main.rs`](../src/analyze/collision_hashmap/main.rs)
 (`cargo run --release --bin analyze-collision`), takes the 413 names and counts, for tables
 of different sizes, how many buckets got more than one name, and how many names share the
 bucket **and** the tag. It uses `hash_one` of the hash builder, so that it hashes exactly like
@@ -257,7 +257,7 @@ rows with one name comparison more, a few hundredths of a nanosecond per row on 
 
 ### 4. The collisions and the benchmarks of each hash, side by side
 
-All the numbers from the tool in [`src/analyze/collision/main.rs`](../src/analyze/collision/main.rs)
+All the numbers from the tool in [`../src/analyze/collision_hashmap/main.rs`](../src/analyze/collision_hashmap/main.rs)
 for the 413 station names ([`input/1B_unique_station_names.txt`](../input/1B_unique_station_names.txt)),
 by the number of buckets of the table. *Buckets with 2+ names* counts the buckets that more
 than one name lands in; *the same bucket and tag* counts the groups of names that hashbrown

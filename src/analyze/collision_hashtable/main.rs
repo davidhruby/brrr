@@ -4,10 +4,47 @@ use std::hint::black_box;
 use std::io::BufRead;
 use std::os::fd::AsRawFd;
 use std::str::from_utf8;
-use brrr::app::{StationTemperatureIterator, StationTable, key_words, StationName, hash_analyse};
+use brrr::app::{StationTemperatureIterator, StationTable, key_words, StationName, hash_analyse, SLOTS, SLOT_BITS};
 
 fn main() {
-    calculate_the_extra_effort();
+    find_first_word_constant();
+}
+
+// the hash from the first 8 bytes of the name and its length: the first 8 bytes are unique for
+// 412 of the 413 names, and the two that share them (Alexandra, Alexandria) differ in length
+fn hash_first_word(word_1: u64, len: usize, multiplier: u64) -> usize {
+    ((word_1 ^ len as u64).wrapping_mul(multiplier) as usize) >> (64 - SLOT_BITS)
+}
+
+// the first odd multiplier from splitmix64 with no collision of hash_first_word on the 413 names
+#[allow(dead_code)]
+fn find_first_word_constant() {
+    let file = File::open("input/1B_unique_station_names.txt").unwrap();
+    let mut keys = Vec::new();
+    for line in std::io::BufReader::new(file).lines() {
+        let line = line.unwrap();
+        let station_name = StationName {
+            rest: line.as_bytes(),
+            len: line.len(),
+        };
+        let (word_1, _) = key_words(&station_name);
+        keys.push((word_1, line.len()));
+    }
+
+    let mut state: u64 = 0;
+    for candidate in 0..100_000 {
+        let multiplier = splitmix64(&mut state) | 1;
+        let mut taken = vec![false; SLOTS];
+        let without_collision = keys.iter().all(|(word_1, len)| {
+            let index = hash_first_word(*word_1, *len, multiplier);
+            !std::mem::replace(&mut taken[index], true)
+        });
+        if without_collision {
+            println!("candidate {}: multiplier {:#018X} has no collision", candidate, multiplier);
+            return;
+        }
+    }
+    println!("no multiplier without a collision in 100,000 candidates");
 }
 
 #[allow(dead_code)]

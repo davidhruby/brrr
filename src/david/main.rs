@@ -124,7 +124,7 @@ pub fn parse_temperature_swar(input: &[u8]) -> i16 {
     ((value as i64 ^ sign) - sign) as i16
 }
 
-pub fn parse_temperature_swar_with_dot_index(input: &[u8]) -> (i16, u8) {
+pub fn parse_temperature_swar_with_dot_index(input: &[u8]) -> (i16, usize) {
     let word = if input.len() >= 8 {
         u64::from_le_bytes(input[..8].try_into().unwrap())
     } else {
@@ -132,10 +132,19 @@ pub fn parse_temperature_swar_with_dot_index(input: &[u8]) -> (i16, u8) {
         helper_array[..input.len()].copy_from_slice(input);
         u64::from_le_bytes(helper_array)
     };
-    let dot_index =  ((!word & 0x1010_1000).trailing_zeros() / 8) as u8;
+    parse_temperature_word(word)
+}
+
+// the 8 bytes from the start of the temperature, already loaded
+#[inline(always)]
+pub fn parse_temperature_word(word: u64) -> (i16, usize) {
+    // 12, 20 or 28: bit 4 of the byte of the dot
+    let dot_bits = (!word & 0x1010_1000).trailing_zeros();
+    let dot_index = (dot_bits / 8) as usize;
     let sign =  ((!word << 59) as i64) >> 63;
     let without_sign = word & !((sign as u64) & 0xFF);
-    let aligned = without_sign << (8 * (3 - dot_index));
+    // 8 * (3 - dot_index) is 28 - dot_bits, one subtraction
+    let aligned = without_sign << (28 - dot_bits);
     let digits = aligned & 0x0F_000F_0F00;
     let value = (digits.wrapping_mul(0x640A_0001) >> 32) & 0x3FF;
     let temperature = ((value as i64 ^ sign) - sign) as i16;
@@ -392,6 +401,34 @@ impl <'a> StationTemperatureIterator<'a> {
 
 //TODO this code works with full pairs in the SIMD only so it can be optimized
 // for example delimiter in first simd and newline in another simd
+
+// one(): the rows of a chunk until this many bytes before its end go through next_fast
+const FAST_MARGIN: usize = 128;
+
+impl <'a> StationTemperatureIterator<'a> {
+    // next without the checks of the end of the chunk, only while at + FAST_MARGIN <= map.len():
+    // the block of 64 bytes from at, and the 8 bytes of the temperature, which starts within
+    // 64 bytes of at, are then in the map
+    #[inline(always)]
+    fn next_fast(&mut self) -> (StationName<'a>, i16) {
+        const DELIMITER: u8x64 = u8x64::splat(b';');
+
+        if self.delimiter_bit_mask == 0 {
+            self.block_start = self.at;
+            let simd_value = unsafe { std::ptr::read_unaligned(self.map.as_ptr().add(self.at) as *const u8x64) };
+            self.delimiter_bit_mask = DELIMITER.simd_eq(simd_value).to_bitmask();
+        }
+        let delimiter_index = self.delimiter_bit_mask.trailing_zeros() as usize;
+        self.delimiter_bit_mask &= self.delimiter_bit_mask - 1;
+        let delimiter = self.block_start + delimiter_index;
+        let station_name = StationName{ rest: unsafe { self.map.get_unchecked(self.at..) }, len: delimiter - self.at};
+        let word = unsafe { std::ptr::read_unaligned(self.map.as_ptr().add(delimiter + 1) as *const u64) };
+        let (parsed_temperature, dot_index) = parse_temperature_word(u64::from_le(word));
+        self.at = delimiter + dot_index + 4;
+        (station_name, parsed_temperature)
+    }
+}
+
 impl <'a> Iterator for StationTemperatureIterator<'a> {
     type Item = (StationName<'a>, i16);
 
@@ -416,12 +453,13 @@ impl <'a> Iterator for StationTemperatureIterator<'a> {
         }
         let delimiter_index = self.delimiter_bit_mask.trailing_zeros() as usize;
         self.delimiter_bit_mask &= self.delimiter_bit_mask - 1;
-        let station = &self.map[self.at..self.block_start + delimiter_index];
-        let station_name = StationName{ rest: &self.map[self.at..], len: station.len()};
-        let temperature = &self.map[self.block_start + delimiter_index + 1..];
+        let delimiter = self.block_start + delimiter_index;
+        let station_name = StationName{ rest: &self.map[self.at..], len: delimiter - self.at};
+        // the ';' was found in the map (at the end of the chunk the mask has bits only for its bytes),
+        // so delimiter < len and delimiter + 1 <= len
+        let temperature = unsafe { self.map.get_unchecked(delimiter + 1..) };
         let (parsed_temperature, dot_index) = parse_temperature_swar_with_dot_index(temperature);
-        // if at = 0 for abc;1.0\ndef;2.0\n so dot index is 3 and next at has to be 0 + 3 + 2 + 4 = 9 to start from def;2.0
-        self.at = self.block_start + delimiter_index + dot_index as usize + 4;
+        self.at = delimiter + dot_index + 4;
         Some((station_name, parsed_temperature))
     }
 }
@@ -643,7 +681,15 @@ fn one_upper_bound(map: &[u8]) -> [MeasurementStats; 128] {
 #[inline(always)]
 fn one(map: &[u8]) -> Vec<(&[u8], MeasurementStats)> {
     let mut stats = StationTable::new();
-    for (station, temperature) in StationTemperatureIterator::new(map) {
+    let mut rows = StationTemperatureIterator::new(map);
+    // all rows but the last ~128 bytes of the chunk without the checks of its end
+    let fast_end = map.len().saturating_sub(FAST_MARGIN);
+    while rows.at < fast_end {
+        let (station, temperature) = rows.next_fast();
+        stats.get_mut_fast(station).update(temperature);
+    }
+    // the last rows with them
+    for (station, temperature) in rows {
         stats.get_mut(station).update(temperature);
     }
     stats.into_entries()
@@ -697,6 +743,19 @@ pub fn key_words(station: &StationName) -> (u64, u64) {
 
 // first 32 of FF and last 32 of 0
 static KEY_MASK_BYTES: [[u8; 32]; 2] = [[0xFF; 32], [0; 32]];
+
+// 128 of FF and 32 of 0: the 32 bytes from 128 - len have FF in the first min(len, 32) of them,
+// for every len from 1 to 128, so the window needs no min; the rules allow names of up to 100 bytes
+const MAX_NAME_LEN: usize = 128;
+static KEY_MASK_WINDOWS: [u8; MAX_NAME_LEN + 32] = {
+    let mut bytes = [0u8; MAX_NAME_LEN + 32];
+    let mut i = 0;
+    while i < MAX_NAME_LEN {
+        bytes[i] = 0xFF;
+        i += 1;
+    }
+    bytes
+};
 
 #[inline(always)]
 pub fn key(station: &StationName) -> u8x32 {
@@ -795,12 +854,19 @@ mod key_words_tests {
     }
 }
 
-pub fn hash(word_1: u64, word_2: u64) -> usize {
-    // reduce overlapping by rotating second word
-    let words = word_1 ^ word_2.rotate_left(7u32);
-    let multiplied_by_magic_constant = words.wrapping_mul(0xA903_8A92_1825_F10D as u64);
-    //reduce to numbers from 0 to 2_047
+// the first 8 bytes of the name are unique for 412 of the 413 names, and the two that share them
+// (Alexandra, Alexandria) differ in length; the multiplier is the first one from splitmix64 with
+// no collision on the 413 names (analyze-collision-hashtable, find_first_word_constant)
+#[inline(always)]
+pub fn hash(word_1: u64, len: usize) -> usize {
+    let multiplied_by_magic_constant = (word_1 ^ len as u64).wrapping_mul(0x4BF2_D035_8334_1075);
     (multiplied_by_magic_constant as usize) >> (64 - SLOT_BITS)
+}
+
+// the first 8 bytes of the key: the low lane of its register, one move
+#[inline(always)]
+pub fn key_first_word(key: u8x32) -> u64 {
+    u64::from_le_bytes(key.to_array()[..8].try_into().unwrap())
 }
 
 pub fn hash_analyse(word_1: u64, word_2: u64, rotate: u32, magic_const: u64) -> usize {
@@ -818,7 +884,7 @@ mod hash_tests {
     #[test]
     fn test_hash() {
         assert!(hash(0, 0) < SLOTS);
-        assert!(hash(u64::MAX, u64::MAX) < SLOTS);
+        assert!(hash(u64::MAX, 100) < SLOTS);
         assert!(hash(u64::MAX, 0) < SLOTS);
     }
 }
@@ -832,14 +898,14 @@ mod keys_with_hash_test {
         let hash_1 = {
             let data = b"Bata;15.0\nDurban;12.2\n";
             let station = StationName { rest: &data[..], len: 4 };
-            let (word1, word2) = key_words(&station);
-            hash(word1, word2)
+            let (word1, _) = key_words(&station);
+            hash(word1, station.len)
         };
         let hash_2 = {
             let data = b"Bata;17.0\n";
             let station = StationName { rest: &data[..], len: 4 };
-            let (word1, word2) = key_words(&station);
-            hash(word1, word2)
+            let (word1, _) = key_words(&station);
+            hash(word1, station.len)
         };
         assert_eq!(hash_1, hash_2);
     }
@@ -899,9 +965,25 @@ impl <'a> StationTable<'a> {
 
     #[inline(always)]
     pub fn get_mut(&mut self, station_name: StationName<'a>) -> &mut MeasurementStats {
-        let key = key(&station_name);
-        let (word_1, word_2) = key_hash_words(key);
-        let mut index = hash(word_1, word_2);
+        self.get_mut_with_key(station_name, key(&station_name))
+    }
+
+    // the key without the check of the end of the chunk: station_name.rest has at least 32 bytes
+    #[inline(always)]
+    fn get_mut_fast(&mut self, station_name: StationName<'a>) -> &mut MeasurementStats {
+        // one subtraction for the start of the window instead of a min and a subtraction, on the
+        // way from the length of the name to the hash and the slot
+        debug_assert!(station_name.len >= 1 && station_name.len <= MAX_NAME_LEN);
+        let mask = unsafe {
+            std::ptr::read_unaligned(KEY_MASK_WINDOWS.as_ptr().add(MAX_NAME_LEN - station_name.len) as *const u8x32)
+        };
+        let bytes = unsafe { std::ptr::read_unaligned(station_name.rest.as_ptr() as *const u8x32) };
+        self.get_mut_with_key(station_name, bytes & mask)
+    }
+
+    #[inline(always)]
+    fn get_mut_with_key(&mut self, station_name: StationName<'a>, key: u8x32) -> &mut MeasurementStats {
+        let mut index = hash(key_first_word(key), station_name.len);
         loop {
             if self.slots.0[index].key == key && (station_name.len <= 32 || self.names[index] == station_name.as_bytes()) {
                 return &mut self.slots.0[index].stats;
@@ -945,6 +1027,44 @@ impl <'a> StationTable<'a> {
 #[cfg(test)]
 mod station_table_tests {
     use super::*;
+
+    #[test]
+    fn key_mask_windows_test() {
+        // the window without min is the same mask as the one with min, for every length
+        for len in 1..=MAX_NAME_LEN {
+            let without_min = &KEY_MASK_WINDOWS[MAX_NAME_LEN - len..MAX_NAME_LEN - len + 32];
+            let in_key = len.min(32);
+            let with_min = &KEY_MASK_BYTES.as_flattened()[32 - in_key..64 - in_key];
+            assert_eq!(without_min, with_min, "len {}", len);
+        }
+    }
+
+    #[test]
+    fn one_fast_and_last_rows_test() {
+        let names = ["A", "Kuwait City", "Bata", "Petropavlovsk-Kamchatsky", "Llanfairpwllgwyngyllgogerychwyrndrobwll", "Ab"];
+        let temperatures = ["-99.9", "0.0", "12.3", "-1.5", "99.9", "5.0", "-12.3"];
+        // shorter than FAST_MARGIN (only the checked rows), and longer (both)
+        for lines in [0, 1, 2, 3, 10, 301, 302] {
+            let mut data = String::new();
+            for i in 0..lines {
+                data.push_str(&format!("{};{}\n", names[i % names.len()], temperatures[i % temperatures.len()]));
+            }
+
+            // the same with only the checked iterator
+            let mut expected = StationTable::new();
+            for (station, temperature) in StationTemperatureIterator::new(data.as_bytes()) {
+                expected.get_mut(station).update(temperature);
+            }
+            let as_tuples = |entries: Vec<(&[u8], MeasurementStats)>| {
+                let mut tuples: Vec<_> = entries.into_iter()
+                    .map(|(name, stats)| (name.to_vec(), stats.min, stats.max, stats.sum, stats.count))
+                    .collect();
+                tuples.sort();
+                tuples
+            };
+            assert_eq!(as_tuples(one(data.as_bytes())), as_tuples(expected.into_entries()), "{} lines", lines);
+        }
+    }
 
     #[test]
     fn into_entries_empty_test() {

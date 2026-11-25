@@ -1,4 +1,4 @@
-# Part 014 — The hot loop: no collisions, inlining, SWAR, a huge page, `znver5` and a key of 32 bytes
+# Part 014 — The hot loop, from 0.809 s to 0.499 s
 
 **Dates:** 2026-11-18 – 2026-11-25
 **Video progress:** the end of the stream, [10:33:47](https://www.youtube.com/watch?v=tCY7p6dVAGE&t=38027s), when this part was published
@@ -719,7 +719,445 @@ The output is identical to hashbrown's (`cmp`).
   that the compiler could drop one more bounds check in this one; the annotate of both would show
   it.
 
-### 13. Summary
+### 13. Positions with `vpcompressw`, not kept
+
+The two phases of change #10 had removed the branch of the next block (0.031 mispredictions),
+but writing the positions of the `;` with eight `trailing_zeros` per block cost 16.8 instructions
+per row. AVX-512 VBMI2, which `znver5` enables, has `vpcompressw`: from 32 lanes of `u16` it takes
+the ones whose bit in a mask is set and puts them next to each other at the start of the register.
+With the lanes `offset + 0, …, 31` and the mask of `;` of half a block, one instruction gives the
+positions of all `;` in those 32 bytes, without a loop and without a branch on how many there are.
+`portable_simd` has no compress, so it was `std::arch::x86_64::_mm512_maskz_compress_epi16`
+behind `#[cfg(target_feature = "avx512vbmi2")]`, with the old loop for the Mac.
+
+| Per row, 1 thread | Key of 32 bytes | Positions with `vpcompressw` | |
+|---|---|---|---|
+| Cycles | 19.52 | 24.25 ± 1.15 % | **+4.73 (+24 %)** |
+| Instructions | 93.06 | 103.74 | +10.68 |
+| Branches | 12.46 | 12.11 | −0.35 |
+| Mispredicted | 0.112 | **0.0043** | **−96 %** |
+| 8 threads | 0.559 s | 0.684 – 0.698 s | |
+
+The output was identical (`cmp`). **The mispredictions were gone**, even more than I predicted
+(~0.025): the branch of the next block had been almost all of them. But the cycles went up by
+more than the 10.7 instructions and the lost mispredictions explain, ~5 – 7 cycles per row of
+waiting somewhere, IPC 4.28 instead of 4.77. My candidates: `vpcompressw` being slow on Zen 5
+(compress into memory is microcode on Zen 4; this was into a register, but I haven't checked its
+cost on Zen 5), or the loads of the positions in `next` waiting for the 64-byte stores of the
+refill that overlap each other. `perf report` would tell them apart, since `refill` was a function
+of its own; I didn't run it. Not kept.
+
+### 14. Three bounds checks fewer
+
+The `perf annotate` with `cycles` of the build with the key of 32 bytes had three jumps out of
+the loop to calls of `core::slice::index::slice_index_fail`, the bounds checks of the slices in
+`next`:
+
+- `&self.map[self.at..self.block_start + delimiter_index]`, a slice made only for its `len()`:
+  `at ≤ end` and `end ≤ len`, two checks;
+- `&self.map[self.block_start + delimiter_index + 1..]` for the temperature, one check;
+- `&self.map[self.at..]` had none, because the compiler knows `at < len` from the
+  `if self.at >= self.map.len() { return None; }` at the start of `next`.
+
+The length of the name is now a subtraction, and the temperature an unchecked slice, with the
+invariant in a comment:
+
+```rust
+let delimiter = self.block_start + delimiter_index;
+let station_name = StationName{ rest: &self.map[self.at..], len: delimiter - self.at};
+// the ';' was found in the map (at the end of the chunk the mask has bits only for its bytes),
+// so delimiter < len and delimiter + 1 <= len
+let temperature = unsafe { self.map.get_unchecked(delimiter + 1..) };
+```
+
+| Per row, 1 thread | Key of 32 bytes | **Without the checks** | |
+|---|---|---|---|
+| Cycles | 19.52 | **19.41** | −0.12 (−0.6 %) |
+| Instructions | 93.06 | **89.06** | −4.00 |
+| Branches | 12.46 | **9.46** | −3.00 |
+| Mispredicted | 0.112 | 0.112 | 0 |
+| Time | 4.41 s | 4.37 s | |
+| 8 threads | 0.559 s | 0.558 s | |
+
+The output is identical to hashbrown's (`cmp`). Three branches and four instructions for 0.12
+cycles: **here the predicted branches cost almost nothing.** In
+[Part 013, change #7](part013-own-hash-table.md#7-arrays-of-a-fixed-size-instead-of-vec) one
+bounds check cost 1.64 cycles, but that one was on the critical path, on the index from which the
+slot was loaded. These compare numbers that are already in registers, off the chain of loads of
+a row. What matters is where a check is, not how many there are. I had predicted −0.3 to −1
+cycle.
+
+The same annotate also showed values spilled to the stack in every row: the `block_start` of the
+block, two values stored and not read back in the hot path, and the 8 bytes of the temperature,
+loaded early and kept on the stack over the whole lookup in the table.
+
+### 15. Against the winner
+
+thomaswue (Thomas Würthinger, with merykitty and mukel) won 1BRC in Java, compiled by GraalVM
+`native-image`. On the same instance, with the same file on the same RAM disk:
+
+- the `prepare_thomaswue.sh` of the challenge asks for Oracle GraalVM `21.0.2-graal`, which
+  SDKMAN no longer offers; `21.0.0.0-graal` is the closest of the same edition;
+- `native-image` needed `zlib1g-dev` to link;
+- **with `-march=native` the image didn't start**: "The current machine does not support all of
+  the following CPU features that are required by the image", followed by every feature of the
+  CPU, SSE2 and CMOV included, on the machine where it had just been built. The detection of the
+  CPU of this GraalVM at run time on Zen 5 in a VM differs from the one at build time; which
+  feature, I don't know. With `-march=x86-64-v4` (AVX2, BMI2 and the base of AVX-512) it runs.
+
+| 1B, 8 threads | `real` (3 runs) |
+|---|---|
+| **thomaswue** | **0.515 – 0.516 s** |
+| brrr | 0.557 – 0.559 s |
+
+8 % slower. Its `user` is 0.001 s: the program starts itself again as a subprocess, which does
+all the work and prints the result, and the parent exits as soon as it has the output, so the
+subprocess unmaps the 13.8 GB and ends its threads after `time` has stopped. Only `real` is
+comparable. `perf stat` counts the subprocess too:
+
+| Per row, all threads | brrr | **thomaswue** |
+|---|---|---|
+| Cycles | 19.41 | **18.14** |
+| Instructions | **89.06** | 103.57 |
+| Branches | 9.46 | **7.58** |
+| Mispredicted | 0.112 | **0.030** |
+| Instructions per cycle | 4.59 | **5.71** |
+
+- **The loop is ~7 % slower, most of the 8 %.** The rest is most likely the end of the program
+  (the subprocess) and the split of the work: thomaswue's threads take segments of 2 MB from an
+  atomic counter, mine have equal chunks.
+- **It does more work, not less**: 14.5 instructions more per row, but at 5.7 per cycle. The
+  difference is the mispredictions, 0.082 per row, at ~29 cycles each (change #10) ~2.4 cycles.
+- **It has no branch of the next block**: no SIMD blocks at all. Every row loads the first 16
+  bytes of its name as two words and finds the `;` in them with SWAR, without a branch; only names
+  longer than 16 bytes, 2.4 % of the rows, take a branch, which is about its 0.03. The price is a
+  chain from one row to the next (the name, the `;`, the temperature, its dot, the next row), and
+  that's what its three scanners interleave.
+
+### 16. The `;` from the 32 bytes of the key, row by row, not kept
+
+What thomaswue does, with AVX-512: every row loads 32 bytes of its name anyway, for the key. A
+comparison with `;` in the same register and `trailing_zeros()` of its mask give the length of
+the name, so there's no iterator of blocks, no mask of 64 bytes, no branch of the next block and
+no second load for the key; a branch only for names of 32 bytes and more, which the data doesn't
+have. The price: the next row starts where this one ends, so every row waits for the one before
+it (its 32 bytes, the `;`, the temperature, its dot). Against that, the chunk of a thread was
+split into `STREAMS` parts, read in turns, one row from each, so that the chains are independent.
+
+| `STREAMS` | Cycles per row | Instructions | Branches | Mispredicted | 8 threads |
+|---|---|---|---|---|---|
+| blocks (change #14) | **19.41** | 89.06 | 9.46 | 0.112 | **0.558 s** |
+| 1 | 30.07 | 85.09 | 9.01 | **0.0002** | 0.858 s |
+| 2 | | | | | 0.599 s |
+| 3 | | | | | 0.724 s |
+
+The output was identical (`cmp`, with one stream).
+
+- **The mispredictions are gone completely**, 227 thousand in 10⁹ rows: almost all of the 0.112
+  were the branch of the next block, and the branches of `min` and `max` are almost never
+  mispredicted.
+- **One stream is a chain of ~30 cycles per row**, more than the ~18 – 20 I estimated: a load of
+  32 bytes, a comparison into a mask register and moving the mask into a normal register take
+  longer each than I thought.
+- **Two streams hid a lot of it, three were worse than two.** The parts were in arrays,
+  `at[i]` and `end[i]`, with a loop over them; my guess is that they stayed in memory, so a store
+  and a load of the stack were in the chain of every row, more of them with three. Writing three
+  separate variables and the body three times, as thomaswue does, would tell. I didn't measure
+  the counters with two and three.
+
+Not kept: the best, two streams, is 7 % slower than the blocks.
+
+### 17. `min` and `max` without branches, and a timeline, kept neither
+
+**`min` and `max` with `min()` and `max()`** instead of two `if`s in `update`, so a `cmov`
+instead of two branches:
+
+| Per row, 1 thread | Three checks fewer | `min`/`max` without branches | |
+|---|---|---|---|
+| Cycles | 19.41 | 21.76 | **+2.35 (+12 %)** |
+| Instructions | 89.06 | 94.07 | +5.01 |
+| Branches | 9.46 | 7.46 | −2.00 |
+| Mispredicted | 0.112 | 0.111 | 0 |
+
+The two branches went, as predicted, for 2.35 cycles. With the `if`s, `min` and `max` were
+written only for a new minimum or maximum, which is rare after the first rows, and the branches
+were almost never mispredicted (with no branch of the next block, in change #16, the whole
+program had 0.0002 mispredictions per row). Without them, every row writes both,
+another load, comparison and store on the path of the next row of the same station. **A
+predicted branch is cheap, and "without branches" isn't faster when it costs work on the critical
+path**: change #14 the other way around.
+
+**A timeline**, behind an environment variable `BRRR_TIMELINE`: the time since the start when
+the file was mapped, when every thread finished, when the results were merged and when the output
+was written, to stderr. Together with the whole output in one `write` instead of a `println!` per
+line (stdout is line-buffered, so 413 writes), and `std::process::exit(0)` right after it,
+without the drops of the tables and of the map:
+
+```text
+  0.222 ms  mapped
+618.756 ms  thread 3 done
+618.989 ms  thread 4 done
+619.172 ms  thread 5 done
+619.266 ms  thread 2 done
+619.329 ms  thread 6 done
+619.609 ms  thread 0 done
+619.660 ms  thread 7 done
+625.071 ms  thread 1 done
+625.113 ms  merged
+625.225 ms  written
+```
+
+- **The end of the program costs ~0.15 ms**, from the last thread to the output written. Nothing
+  to gain there, with one write or with 413.
+- **Seven threads finish within 1 ms, one ~5.4 ms later.** That's all that segments from an
+  atomic counter (thomaswue's split of the work) could give, ~1 %.
+
+But with `update` back to its `if`s, this build had **20.76 cycles per row instead of 19.41**
+(± 0.26 %), 90.07 instructions, and 0.596 s on 8 threads instead of 0.558 s. The only other
+change was in `main`. The loop is inlined into the closure of the thread, and the `if timeline {
+eprintln!(…) }` after `one` is in the same closure; the compiler translated the closure, loop
+included, differently. The same as the `eprintln` of
+[Part 012, change #7](part012-threads-and-4kb-pages.md#7-the-same-code-a-different-inlining),
+7 % this time. Which of the three changes in `main` it was, I didn't measure; the one in the
+closure of the thread is the likely one. **Code that measures must not be in the function of the
+hot loop**, or it measures another program. I went back to the `main` without them.
+
+### 18. The end of the line from the same load, not kept
+
+In change #16 the next row started where the temperature ended, so the chain from row to row went
+through the parser. But the end of a line is its `\n`, and a line of the data has at most 26 + 1 +
+5 + 1 = 33 bytes, so 64 bytes from its start hold both its `;` and its `\n`: two masks from one
+load, the next row at `trailing_zeros()` of the mask of `\n` + 1, and the key from the low 32 of
+the same 64 bytes. The parser, the key and the table were off the chain.
+
+One stream: **0.730 s** on 8 threads, against 0.858 s through the parser and 0.558 s with the
+blocks. I had predicted 0.44 – 0.49 s from a chain of 12 – 15 cycles; at ~25 cycles per row it
+was more like twice that. I didn't measure the counters. Not kept.
+
+### 19. The dot in bits
+
+The parser computed the shift that aligns the dot from the index of its byte,
+`8 * (3 - dot_index)` with `dot_index` a `u8`, which the compiler made `and $0x38`, `mov $0x18`,
+`sub` and `shlx`. But `trailing_zeros()` of the mask of the dot is 12, 20 or 28, so the shift is
+`28 - dot_bits`, one subtraction, as merykitty has it. And the index is returned as `usize`, so
+there's no conversion where the iterator adds it to the position:
+
+```rust
+// 12, 20 or 28: bit 4 of the byte of the dot
+let dot_bits = (!word & 0x1010_1000).trailing_zeros();
+let dot_index = (dot_bits / 8) as usize;
+let sign =  ((!word << 59) as i64) >> 63;
+let without_sign = word & !((sign as u64) & 0xFF);
+// 8 * (3 - dot_index) is 28 - dot_bits, one subtraction
+let aligned = without_sign << (28 - dot_bits);
+```
+
+| Per row, 1 thread | Three checks fewer | **The dot in bits** | |
+|---|---|---|---|
+| Cycles | 19.41 | **19.09** | −0.32 (−1.6 %) |
+| Instructions | 89.06 | **87.06** | −2.00 |
+| Branches | 9.46 | 9.46 | 0 |
+| Mispredicted | 0.112 | 0.112 | 0 |
+| 8 threads | 0.558 s | **0.545 s** | −2.3 % |
+
+Two instructions for 0.32 cycles, where the three bounds checks of change #14 gave 0.12 for four:
+the parser is on the way to `update`, the checks were off it.
+
+### 20. The hash from the first 8 bytes and the length
+
+The hash took two words from the key, the low one with `vmovq` and the high one with `vpextrq`,
+which is two micro-ops with a longer latency, then a rotation, an `xor`, the multiplication and a
+shift, all on the way from the name to the load of its slot. **The first 8 bytes are unique for
+412 of the 413 names**; the two that share them, `Alexandra` and `Alexandria`, differ in length.
+So the hash can be the first word and the length:
+
+```rust
+// the first 8 bytes of the name are unique for 412 of the 413 names, and the two that share them
+// (Alexandra, Alexandria) differ in length; the multiplier is the first one from splitmix64 with
+// no collision on the 413 names (analyze-collision-hashtable, find_first_word_constant)
+#[inline(always)]
+pub fn hash(word_1: u64, len: usize) -> usize {
+    let multiplied_by_magic_constant = (word_1 ^ len as u64).wrapping_mul(0x4BF2_D035_8334_1075);
+    (multiplied_by_magic_constant as usize) >> (64 - SLOT_BITS)
+}
+
+// the first 8 bytes of the key: the low lane of its register, one move
+#[inline(always)]
+pub fn key_first_word(key: u8x32) -> u64 {
+    u64::from_le_bytes(key.to_array()[..8].try_into().unwrap())
+}
+```
+
+`get_mut` takes `hash(key_first_word(key), station_name.len)`. The multiplier is a new search with
+splitmix64, as in change #3, in `find_first_word_constant` of the tool: candidate 296, the same
+one a Python script with the same computation found.
+
+| Per row, 1 thread | The dot in bits | **Hash from 8 bytes** | |
+|---|---|---|---|
+| Cycles | 19.09 | **18.46** | **−0.63 (−3.3 %)** |
+| Instructions | 87.06 | **85.06** | −2.00 |
+| Branches | 9.46 | 9.46 | 0 |
+| Mispredicted | 0.112 | 0.112 | 0 |
+| 8 threads | 0.545 s | **0.526 s** | −3.5 % |
+
+The output is identical to hashbrown's (`cmp`), and the mispredictions show the hash is still
+without collisions. Two instructions for 0.63 cycles, the best of all the changes: they were
+right on the way to the load of the slot. I had predicted −0.2 to −0.5.
+
+### 21. The key with a masked load, not kept
+
+`key` takes `len.min(32)`, the address of the window in `KEY_MASK_BYTES`, a load of the mask, the
+branch on the end of the chunk, a load of the name and an `and`. AVX-512 has a masked load:
+`_bzhi_u32(u32::MAX, len)` makes a mask of one bit per byte of the name, and
+`_mm256_maskz_loadu_epi8` loads only those bytes and sets the rest to 0; it doesn't read the
+bytes outside the mask, so it can't fault at the end of the map, and the branch goes too.
+`std::arch`, behind `#[cfg(target_feature = "avx512bw")]`, with the window for the Mac.
+
+| Per row, 1 thread | Hash from 8 bytes | Masked load | |
+|---|---|---|---|
+| Cycles | **18.46** | 18.60 | **+0.14** |
+| Instructions | 85.06 | **78.06** | **−7.00** |
+| Branches | 9.46 | **8.46** | −1.00 |
+| Mispredicted | 0.112 | 0.111 | 0 |
+| 8 threads | **0.526 s** | 0.529 – 0.530 s | |
+
+Seven instructions and a branch fewer, and slower. The key is on the way from the length to the
+hash and the slot. Before, the load of the name ran next to the computation of the mask and the
+`and` joined them; now the load waits for the mask, and the mask has to go from a normal register
+into a mask register first. A shorter program with a longer chain, my guess; the annotate would
+show it. **On the critical path the latency counts, not the number of instructions**: changes #14,
+#17 and this one together. Not kept.
+
+### 22. A fast loop without the checks of the end of the chunk
+
+On every row the code checked things that are true for all rows but the last few of a chunk:
+`input.len() >= 8` in the parser, `rest.len() < 32` in `key`, `at + 64 <= len` for a new block,
+`at >= len` and the `Option` of `next`, with the lengths of the slices computed for them. All of
+them only because a chunk ends somewhere. So the rows go through a loop without them while at
+least 128 bytes are left, and the last rows of the chunk through `next` with them, on the same
+iterator:
+
+```rust
+let fast_end = map.len().saturating_sub(FAST_MARGIN);
+while rows.at < fast_end {
+    let (station, temperature) = rows.next_fast();
+    stats.get_mut_fast(station).update(temperature);
+}
+// the last rows with them
+for (station, temperature) in rows {
+    stats.get_mut(station).update(temperature);
+}
+```
+
+`next_fast` loads the block, the 8 bytes of the temperature and `get_mut_fast` the 32 bytes of the
+name with `read_unaligned`, without a branch on the length: with at least 128 bytes left after
+`at`, the block of 64 bytes from `at`, a name that starts before `at + 64` and a temperature that
+starts before `at + 65` are all in the map. The parser is split into the load of the 8 bytes and
+`parse_temperature_word(word)`, which the fast loop calls with the word it loaded.
+
+| Per row, 1 thread | Hash from 8 bytes | **Fast loop** | |
+|---|---|---|---|
+| Cycles | 18.46 | **17.91** | −0.55 (−3.0 %) |
+| Instructions | 85.06 | **76.51** | −8.55 |
+| Branches | 9.46 | **6.79** | −2.67 |
+| Mispredicted | 0.112 | 0.111 | 0 |
+| 8 threads | 0.526 s | **0.512 s** | −2.5 % |
+
+The output is identical to hashbrown's (`cmp`). I predicted −4 to −6 instructions, −2 branches
+and −0.1 to −0.4 cycles; it removed more than the two checks I counted: the lengths of the
+slices, the `Option` and the check of `at` against the end, which is now only `at < fast_end`.
+
+thomaswue again, in the same session, the two programs in turns:
+
+| 8 threads | thomaswue | brrr |
+|---|---|---|
+| run 1 | 0.519 s | **0.510 s** |
+| run 2 | 0.515 s | 0.515 s |
+
+A draw, ~1 % for brrr, within the ±5 ms between runs.
+
+### 23. The window of the mask without `min`
+
+`key` took `len.min(32)` for the start of its window in `KEY_MASK_BYTES` (`mov`, `sub`, `cmov`),
+only because for a name longer than 32 bytes `32 - len` would be before the start of the array.
+With 128 bytes of `0xFF` in front of the 32 zeros, the window from `128 - len` has `0xFF` in its
+first `min(len, 32)` bytes for every `len` from 1 to 128, and the rules allow names of at most
+100 bytes:
+
+```rust
+// 128 of FF and 32 of 0: the 32 bytes from 128 - len have FF in the first min(len, 32) of them,
+// for every len from 1 to 128, so the window needs no min; the rules allow names of up to 100 bytes
+const MAX_NAME_LEN: usize = 128;
+static KEY_MASK_WINDOWS: [u8; MAX_NAME_LEN + 32] = {
+    let mut bytes = [0u8; MAX_NAME_LEN + 32];
+    let mut i = 0;
+    while i < MAX_NAME_LEN {
+        bytes[i] = 0xFF;
+        i += 1;
+    }
+    bytes
+};
+```
+
+```rust
+fn get_mut_fast(&mut self, station_name: StationName<'a>) -> &mut MeasurementStats {
+    // one subtraction for the start of the window instead of a min and a subtraction, on the
+    // way from the length of the name to the hash and the slot
+    debug_assert!(station_name.len >= 1 && station_name.len <= MAX_NAME_LEN);
+    let mask = unsafe {
+        std::ptr::read_unaligned(KEY_MASK_WINDOWS.as_ptr().add(MAX_NAME_LEN - station_name.len) as *const u8x32)
+    };
+    let bytes = unsafe { std::ptr::read_unaligned(station_name.rest.as_ptr() as *const u8x32) };
+    self.get_mut_with_key(station_name, bytes & mask)
+}
+```
+
+`read_unaligned` and not a slice, because the compiler doesn't know `len <= 128` and would add a
+bounds check, on the same way; and because a window starts at any byte, while a `u8x32` is
+aligned to 32. The `debug_assert!` checks what the `unsafe` depends on, in the tests, and costs
+nothing in a release build. A test compares the window with the one with `min` for every length.
+
+| Per row, 1 thread | Fast loop | **Window without `min`** | |
+|---|---|---|---|
+| Cycles | 17.91 | **17.60** ± 0.8 % | −0.31 (−1.8 %) |
+| Instructions | 76.51 | **74.51** | −2.00 |
+| Branches | 6.79 | 6.79 | 0 |
+| Mispredicted | 0.111 | 0.111 | 0 |
+| 8 threads | 0.512 s | **0.498 – 0.499 s** | −2.7 % |
+
+The output is identical to hashbrown's (`cmp`). Under half a second, ~3 % ahead of thomaswue's
+0.515 – 0.519 s on the same instance.
+
+### 24. Six more experiments, kept none
+
+| Experiment | 8 threads | Against | |
+|---|---|---|---|
+| Hash from a load of 8 bytes and a mask computed from the length (`u64::MAX >> (64 - 8 * min(len, 8))`), instead of the first word of the vector key | 0.553 s | 0.512 s | worse |
+| Segments of 2 MB from an atomic counter instead of one chunk per thread | 0.515 s, `user` +1 % | 0.512 s | no gain |
+| The rare paths of the lookup (a new station, a name longer than 32 bytes) in a `#[cold]` function | 0.512 – 0.513 s | 0.512 s | no change |
+| The end of the fast loop checked once per block: an outer loop over blocks, an inner `while mask != 0` | 0.499 – 0.504 s | 0.499 s | no change |
+| Hash from two loads of 8 bytes, the name and the first 8 bytes of the window of the mask | 0.513 – 0.514 s | 0.499 s | worse |
+| Exactly two rows per block of 64 bytes loaded from `at`, no branch on the mask running out | 0.575 – 0.577 s | 0.499 s | worse |
+
+- **Segments**: the threads ended within ~5 ms of each other already (change #17), and every
+  segment starts its own iterator and ends with the checked rows, and every thread reads the
+  file in jumps of 2 MB instead of one piece. thomaswue has them for machines whose cores differ.
+- **The two hashes from scalar loads** were both worse, although they take the vector load and
+  the move out of the vector register off the way to the slot. Why, I don't know; I didn't
+  measure the counters of either. My model of the latencies here is wrong somewhere.
+- **Two rows per block** removes the branch of the next block: in 64 bytes from the start of a row
+  there are always two `;` in this data (a line has at most 33 bytes, a name at most 26). But the
+  block is then loaded from `at`, and `at` comes from the temperature of the row before, so every
+  block waits for the one before. The same happened to every version that loads from `at`
+  (changes #16 and #18). The iterator of blocks is fast because where the `;` of a block are
+  doesn't depend on where the row before ended.
+
+**What worked in this part was what shortened the way from the start of a row to the load of its
+slot, or to `update`**: the parser (#19), the hash (#20), the checks of the end of the chunk
+(#22), the window of the mask (#23). What took instructions or branches off that way, the bounds
+checks (#14), `#[cold]`, the check once per block, gave nothing or close to it.
+
+### 25. Summary
 
 | 1B, Zen 5, 2 MB pages | Cycles per row | Mispredicted per row | 1 thread | 8 threads |
 |---|---|---|---|---|
@@ -730,7 +1168,13 @@ The output is identical to hashbrown's (`cmp`).
 | + only the `;` mask | 24.03 | 0.120 | 5.40 s | 0.683 s |
 | + the slots on a 2 MB page | 23.70 | 0.120 | 5.27 s | 0.668 s |
 | + `target-cpu=znver5` | 21.35 | 0.119 | 4.75 s | 0.608 s |
-| **+ a key of 32 bytes** | **19.52** | **0.112** | **4.41 s** | **0.559 s** |
+| + a key of 32 bytes | 19.52 | 0.112 | 4.41 s | 0.559 s |
+| + three bounds checks fewer | 19.41 | 0.112 | 4.37 s | 0.558 s |
+| + the dot in bits | 19.09 | 0.112 | 4.30 s | 0.545 s |
+| + the hash from 8 bytes | 18.46 | 0.112 | 4.15 s | 0.526 s |
+| + a fast loop without the checks of the end of the chunk | 17.91 | 0.111 | 4.03 s | 0.512 s |
+| **+ the window of the mask without `min`** | **17.60** | **0.111** | **3.97 s** | **0.499 s** |
+| thomaswue (Java, GraalVM), the same instance | 18.14 | 0.030 | | 0.515 – 0.519 s |
 
 From now on, every change is measured against the step before it. The floor of Part 013 was
 measured with `next` as a call, so it isn't a floor any more.
@@ -739,11 +1183,12 @@ measured with `next` as a call, so it isn't a floor any more.
 
 ## Next steps
 
-1. **`perf annotate` with `cycles`** on the current build: which of the ~93 instructions per row
-   are bounds checks, spills and moves, against an estimate of ~50 that a row needs.
-2. **The branch of the next block for less than ~2.6 cycles**: the first two experiments of change #10
-   show what it costs and what it gives; the annotate of both would show where their extra
-   instructions are.
+1. **`hyperfine` for brrr and thomaswue in one session**, several runs each, for a firmer number
+   than ~3 %.
+2. **The branch of the next block**, still ~0.09 of the 0.111 mispredictions: a second mask
+   computed in advance and switched to with a `cmov`, so the real branch is once per 128 bytes;
+   without loading anything from `at`.
+3. **The annotate of the two hashes from scalar loads** (#24), to find out why they were slower.
 
 ## TODO
 
